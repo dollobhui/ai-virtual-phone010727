@@ -20,7 +20,7 @@ export default function Fixture() {
     useEffect(() => {
         (async () => {
             await hydrateKvDb(); await hydrateSettingsDb();
-            if (!loadApiConfigs().length) saveApiConfigs([{ id: "fixture-api", name: "Alpha API", provider: "OpenAI", defaultModel: "test-model", apiKey: "fixture-secret", baseUrl: "https://example.test/v1", enableNativeTools: true, enableImageRecognition: false, enableImageGeneration: false }]);
+            if (!loadApiConfigs().length) await saveApiConfigs([{ id: "fixture-api", name: "Alpha API", provider: "OpenAI", defaultModel: "test-model", apiKey: "fixture-secret", baseUrl: "https://example.test/v1", enableNativeTools: true, enableImageRecognition: false, enableImageGeneration: false }]);
             if (!loadVoiceConfigs().length) saveVoiceConfigs([{ id: "fixture-voice", name: "Alpha Voice", provider: "OpenAI", model: "tts-1", apiKey: "fixture-secret", defaultVoice: "alloy", enableTTS: true, enableSTT: true }]);
             if (!loadWorldBooks().length) saveWorldBooks([{ ...createWorldBook("Alpha Worldbook"), id: "fixture-book", description: "basic description", entries: [{ uid: "fixture-entry", key: "trigger", comment: "inside-only", content: "secret-body-not-searchable", use_regex: false, disable: false, constant: false, position: 4, insertion_order: 50 }] }]);
             setLoaded(true);

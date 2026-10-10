@@ -108,6 +108,7 @@ const baseUrl = 'http://127.0.0.1:' + port;
         };
         await check('chat picker and actual floating picker synchronize in both directions', async () => {
             let popover = await quick();
+            assert.equal(await popover.getByRole('button', { name: '当前来源：默认 API（原配置）', exact: true }).count(), 1);
             assert.equal(await popover.getByRole('button', { name: '收藏配置', exact: true }).getAttribute('data-selected'), 'true');
             await popover.getByRole('button', { name: '工作配置', exact: true }).click();
             await page.waitForFunction(() => document.querySelector('.quick-action-option[data-selected="true"] span')?.textContent === '工作配置');

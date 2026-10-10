@@ -224,19 +224,32 @@ export async function kvUpdateCommitted(
     update: (raw: string | null, dependencies: Record<string, string | null>) => string,
     readKeys: string[] = [],
 ): Promise<string> {
+    const values = await kvUpdateManyCommitted([key, ...readKeys], raw => ({
+        [key]: update(raw[key], Object.fromEntries(readKeys.map(readKey => [readKey, raw[readKey]]))),
+    }));
+    return values[key];
+}
+
+/** Commit related records together; publish every cache value only after success. */
+export async function kvUpdateManyCommitted(
+    keys: string[],
+    update: (raw: Record<string, string | null>) => Record<string, string>,
+): Promise<Record<string, string>> {
     if (typeof window === "undefined" || !isKvHydrated()) throw new Error("存储尚未读取成功，请重试");
-    const value = await kvDb.transaction("rw", kvDb.entries, async () => {
-        const existing = await kvDb.entries.get(key);
-        const dependencies: Record<string, string | null> = {};
-        for (const readKey of readKeys) {
-            dependencies[readKey] = (await kvDb.entries.get(readKey))?.value ?? null;
+    const values = await kvDb.transaction("rw", kvDb.entries, async () => {
+        const raw: Record<string, string | null> = {};
+        for (const key of new Set(keys)) {
+            raw[key] = (await kvDb.entries.get(key))?.value ?? null;
         }
-        const next = update(existing?.value ?? null, dependencies);
-        await kvDb.entries.put({ key, value: next });
+        const next = update(raw);
+        for (const [key, value] of Object.entries(next)) {
+            if (!keys.includes(key)) throw new Error("提交包含未读取的记录");
+            await kvDb.entries.put({ key, value });
+        }
         return next;
     });
-    _cache.set(key, value);
-    return value;
+    for (const [key, value] of Object.entries(values)) _cache.set(key, value);
+    return values;
 }
 
 // ── Delete ──

@@ -42,6 +42,36 @@ const seed = async (config = baseline) => {
 };
 const chat = (config, id = 'alice') => storage.resolveBinding(config, id, 'chat');
 
+// Hold a real IndexedDB transaction open, then enqueue an independent UI action.
+// This reproduces slow-storage overlap deterministically instead of relying on timers.
+const overlapCommit = async (key, first, whilePending) => {
+    const proto = Object.getPrototypeOf(Object.getPrototypeOf(db.table('entries'))), put = proto.put;
+    let release, reached, armed = true;
+    const gate = new Promise(resolve => { release = resolve; });
+    const ready = new Promise(resolve => { reached = resolve; });
+    proto.put = function(value, ...args) {
+        if (armed && value.key === key && Dexie.currentTransaction) {
+            armed = false; reached();
+            return Dexie.waitFor(gate).then(() => put.call(this, value, ...args));
+        }
+        return put.call(this, value, ...args);
+    };
+    let pending, others = [];
+    try {
+        pending = first();
+        await Promise.race([ready, pending.then(() => { throw new Error('Commit was not paused'); })]);
+        others = Dexie.ignoreTransaction(whilePending);
+        release();
+        return await Promise.all([pending, ...others]);
+    } finally {
+        release();
+        await Promise.allSettled([pending, ...others]);
+        proto.put = put;
+    }
+};
+
+const assertCacheMatchesDisk = async () => assert.deepEqual(storage.loadBindingConfig(), await persisted());
+
 test('shared character API lifecycle', async t => {
     await kv.hydrateKvDb();
     await require('../lib/settings-db.ts').hydrateSettingsDb();
@@ -131,8 +161,8 @@ test('shared character API lifecycle', async t => {
     });
     await t.test('deletion freezes inherited chat API, cancels only affected runs and survives default cleanup', async () => {
         await seed(); const run = state.beginOnlineTextGeneration('alice', 'base'), other = state.beginOnlineTextGeneration('bob', 'other');
-        storage.saveApiConfigs(apis.filter(api => api.id !== 'base'));
-        storage.removeApiConfigReferences('base'); storage.ensureGlobalBindingDefaults();
+        await storage.saveApiConfigs(apis.filter(api => api.id !== 'base'));
+        await storage.removeApiConfigReferences('base'); await storage.ensureGlobalBindingDefaults();
         await kv.kvUpdateCommitted(bindingKey, raw => raw);
         assert.equal(run.signal.aborted, true); assert.ok(run.signal.reason instanceof state.OnlineTextApiUnavailableError);
         assert.equal(other.signal.aborted, false);
@@ -152,14 +182,140 @@ test('shared character API lifecycle', async t => {
         await seed(); await storage.saveCharacterApiConfig('alice', 'next');
         // Simulate an external API deletion that bypasses the ordinary settings save event.
         await kv.kvSetAsync(apiKey, JSON.stringify(apis.filter(api => api.id !== 'next')));
-        storage.removeApiConfigReferences('next');
+        await storage.removeApiConfigReferences('next');
         await kv.kvUpdateCommitted(bindingKey, raw => raw);
         const saved = await persisted();
         assert.equal(chat(saved).apiConfigId, 'next');
         assert.equal(saved.characterBindings[0].appOverrides.chat.apiConfigId, 'next');
         assert.equal(chat(saved, 'bob').apiConfigId, 'other');
-        storage.removeApiConfigReferences('next');
+        await storage.removeApiConfigReferences('next');
         assert.deepEqual(storage.loadBindingConfig(), saved);
+    });
+    await t.test('switch then deletion of the previous API cannot overwrite the new selection', async () => {
+        await seed();
+        await overlapCommit(bindingKey, () => storage.saveCharacterApiConfig('alice', 'next'), () => [
+            storage.saveApiConfigs(apis.filter(api => api.id !== 'base')),
+            storage.removeApiConfigReferences('base'),
+        ]);
+        await assertCacheMatchesDisk();
+        const saved = await persisted();
+        assert.equal(chat(saved).apiConfigId, 'next');
+        assert.equal(chat(saved, 'bob').apiConfigId, 'other');
+        assert.deepEqual(chat(saved).worldBookIds, ['world']);
+        assert.equal(chat(saved).presetId, 'preset');
+        assert.equal(chat(saved).voiceConfigId, 'voice');
+    });
+    await t.test('deletion then switching to a surviving API replaces only the invalid selection', async () => {
+        await seed();
+        await overlapCommit(apiKey, () => storage.saveApiConfigs(apis.filter(api => api.id !== 'base')), () => [
+            storage.saveCharacterApiConfig('alice', 'next'),
+            storage.removeApiConfigReferences('base'),
+        ]);
+        await assertCacheMatchesDisk();
+        assert.equal(chat(await persisted()).apiConfigId, 'next');
+        assert.equal(chat(await persisted(), 'bob').apiConfigId, 'other');
+    });
+    await t.test('deleting the target first rejects the queued switch without fallback', async () => {
+        await seed();
+        await overlapCommit(apiKey, () => storage.saveApiConfigs(apis.filter(api => api.id !== 'next')), () => [
+            assert.rejects(storage.saveCharacterApiConfig('alice', 'next'), /已删除/),
+        ]);
+        await assertCacheMatchesDisk();
+        assert.equal(chat(await persisted()).apiConfigId, 'base');
+    });
+    await t.test('deleting a newly selected API preserves that invalid binding rather than the previous API', async () => {
+        await seed();
+        await overlapCommit(bindingKey, () => storage.saveCharacterApiConfig('alice', 'next'), () => [
+            storage.saveApiConfigs(apis.filter(api => api.id !== 'next')),
+            storage.removeApiConfigReferences('next'),
+        ]);
+        await assertCacheMatchesDisk();
+        const saved = await persisted();
+        assert.equal(chat(saved).apiConfigId, 'next');
+        assert.equal(saved.characterBindings[0].appOverrides.chat.apiConfigId, 'next');
+        assert.equal(storage.loadApiConfigs().some(api => api.id === 'next'), false);
+    });
+    await t.test('pending and already stale binding edits preserve API selections and other roles', async () => {
+        await seed(); const before = storage.loadBindingConfig(), edited = structuredClone(before);
+        edited.characterBindings[0].defaults.worldBookIds = ['edited-world'];
+        edited.characterBindings[0].appOverrides.chat.presetId = 'edited-preset';
+        await overlapCommit(bindingKey, () => storage.saveCharacterApiConfig('alice', 'next'), () => [
+            storage.saveBindingConfig(edited, true, before),
+            storage.saveCharacterApiConfig('bob', 'base'),
+        ]);
+        const later = structuredClone(before); later.globalDefaults.voiceConfigId = 'edited-voice';
+        await storage.saveBindingConfig(later, true, before);
+        await assertCacheMatchesDisk();
+        const saved = await persisted();
+        assert.equal(chat(saved).apiConfigId, 'next');
+        assert.equal(chat(saved, 'bob').apiConfigId, 'base');
+        assert.deepEqual(chat(saved).worldBookIds, ['edited-world']);
+        assert.equal(chat(saved).presetId, 'edited-preset');
+        assert.equal(chat(saved).voiceConfigId, 'edited-voice');
+    });
+    await t.test('independent stale API list edits cannot resurrect deleted configs or discard unrelated edits', async () => {
+        await seed(); const first = apis.filter(api => api.id !== 'base');
+        const second = apis.filter(api => api.id !== 'next').map(api => ({ ...api, name: api.id === 'other' ? 'edited name' : 'stale edit to deleted config' }));
+        await overlapCommit(apiKey, () => storage.saveApiConfigs(first, apis), () => [storage.saveApiConfigs(second, apis)]);
+        assert.deepEqual(storage.loadApiConfigs().map(api => api.id), ['other']);
+        assert.equal(storage.loadApiConfigs()[0].name, 'edited name');
+        await assertCacheMatchesDisk();
+        assert.equal(chat(await persisted()).apiConfigId, 'base');
+    });
+    await t.test('failed deletion rolls back API and binding records together without events or cancellation', async () => {
+        await seed(); const before = await persisted(), beforeApis = storage.loadApiConfigs();
+        const run = state.beginOnlineTextGeneration('alice', 'base'); let notices = 0;
+        const listener = () => notices++;
+        for (const event of ['settings-bindings-updated', 'settings-api-configs-updated']) events.addEventListener(event, listener);
+        const proto = Object.getPrototypeOf(Object.getPrototypeOf(db.table('entries'))), put = proto.put;
+        proto.put = function(value, ...args) { return value.key === bindingKey ? Promise.reject(new Error('injected deletion failure')) : put.call(this, value, ...args); };
+        try { await assert.rejects(storage.saveApiConfigs(apis.filter(api => api.id !== 'base')), /deletion failure/); }
+        finally {
+            proto.put = put;
+            for (const event of ['settings-bindings-updated', 'settings-api-configs-updated']) events.removeEventListener(event, listener);
+        }
+        assert.deepEqual(await persisted(), before); assert.deepEqual(storage.loadBindingConfig(), before);
+        assert.deepEqual(storage.loadApiConfigs(), beforeApis);
+        assert.deepEqual(JSON.parse((await db.table('entries').get(apiKey)).value), apis);
+        assert.equal(notices, 0); assert.equal(run.signal.aborted, false); run.finish();
+        await storage.saveCharacterApiConfig('alice', 'next');
+        assert.equal(chat(await persisted()).apiConfigId, 'next');
+    });
+    await t.test('successful deletion publishes API and binding caches together before either event', async () => {
+        await seed(); const observed = [];
+        const listener = () => observed.push({ missing: !storage.loadApiConfigs().some(api => api.id === 'base'), binding: chat(storage.loadBindingConfig()).apiConfigId });
+        for (const event of ['settings-bindings-updated', 'settings-api-configs-updated']) events.addEventListener(event, listener);
+        try { await storage.saveApiConfigs(apis.filter(api => api.id !== 'base')); }
+        finally { for (const event of ['settings-bindings-updated', 'settings-api-configs-updated']) events.removeEventListener(event, listener); }
+        assert.deepEqual(observed, [{ missing: true, binding: 'base' }, { missing: true, binding: 'base' }]);
+        await assertCacheMatchesDisk();
+    });
+    await t.test('queued default cleanup and binding updater read the committed selection rather than a stale snapshot', async () => {
+        await seed(); let observed;
+        await overlapCommit(apiKey, () => storage.saveApiConfigs(apis.filter(api => api.id !== 'base')), () => [
+            storage.saveCharacterApiConfig('alice', 'other'),
+            storage.ensureGlobalBindingDefaults(),
+            storage.saveBindingConfig(latest => {
+                observed = { chat: chat(latest).apiConfigId, global: latest.globalDefaults.apiConfigId,
+                    apiIds: storage.loadApiConfigs().map(api => api.id) };
+                return { ...latest, globalDefaults: { ...latest.globalDefaults, worldBookIds: ['updated-world'] } };
+            }),
+        ]);
+        assert.deepEqual(observed, { chat: 'other', global: 'next', apiIds: ['next', 'other'] });
+        await assertCacheMatchesDisk();
+        assert.equal(chat(await persisted()).apiConfigId, 'other');
+        assert.deepEqual(chat(await persisted()).worldBookIds, ['updated-world']);
+    });
+    await t.test('API commits preserve original legacy role resource bindings before their first normal read', async () => {
+        await seed(); kv.kvRemove(bindingKey); await db.table('entries').delete(bindingKey);
+        const legacyKey = 'ai_phone_char_settings_v1';
+        await kv.kvSetAsync(legacyKey, JSON.stringify([{ characterId: 'alice', presetId: 'legacy-preset', worldBookId: 'legacy-world', regexId: 'legacy-regex' }]));
+        try {
+            await storage.saveApiConfigs(apis.filter(api => api.id !== 'base'));
+            assert.deepEqual((await persisted()).characterBindings[0].defaults,
+                { presetId: 'legacy-preset', worldBookIds: ['legacy-world'], regexIds: ['legacy-regex'] });
+            await assertCacheMatchesDisk();
+        } finally { kv.kvRemove(legacyKey); await db.table('entries').delete(legacyKey); }
     });
     db.close();
 });

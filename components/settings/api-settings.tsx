@@ -70,8 +70,8 @@ export function ApiSettings() {
 
     const persist = useCallback((newConfigs: ApiConfig[]) => {
         setConfigs(newConfigs);
-        saveApiConfigs(newConfigs);
-    }, []);
+        return saveApiConfigs(newConfigs, configs);
+    }, [configs]);
 
     const addConfig = useCallback(() => {
         if (!folders.ready || folders.busy) return;
@@ -112,8 +112,13 @@ export function ApiSettings() {
 
     const removeConfig = async (id: string) => {
         if (!await folders.removeAssociation(id)) return false;
-        persist(configs.filter(c => c.id !== id));
-        removeApiConfigReferences(id);
+        try {
+            await persist(configs.filter(c => c.id !== id));
+            await removeApiConfigReferences(id);
+        } catch {
+            setConfigs(loadApiConfigs());
+            return false;
+        }
         const newFetchedModels = { ...fetchedModels };
         delete newFetchedModels[id];
         setFetchedModels(newFetchedModels);

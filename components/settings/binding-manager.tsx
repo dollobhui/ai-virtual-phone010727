@@ -197,13 +197,16 @@ export function BindingManager() {
             }
             return [s, changed];
         };
-        setConfig(prev => {
+        let cancelled = false;
+        const committed = saveBindingConfig(prev => {
+            const currentApis = loadApiConfigs();
+            validSets.api = new Set(currentApis.map(api => api.id));
             let dirty = false;
             const [gd, gChanged] = cleanSlot(prev.globalDefaults);
             if (gChanged) dirty = true;
             // 全局三项「所见即所得」：不允许未设置，缺省/悬空清理后落位为实际兜底值
             // （API=第一个配置、预设=内置、身份=第一条），界面显示的就是实际生效的
-            if (apiConfigs.length > 0 && !gd.apiConfigId) { gd.apiConfigId = apiConfigs[0].id; dirty = true; }
+            if (currentApis.length > 0 && !gd.apiConfigId) { gd.apiConfigId = currentApis[0].id; dirty = true; }
             if (presets.length > 0 && !gd.presetId) { gd.presetId = (presets.find(p => p.builtIn) ?? presets[0]).id; dirty = true; }
             if (identities.length > 0 && !gd.userIdentityId) { gd.userIdentityId = identities[0].id; dirty = true; }
             const newAppDefaults: Record<string, BindingSlot> = {};
@@ -247,12 +250,10 @@ export function BindingManager() {
                 next.qaApiConfigId = undefined;
                 dirty = true;
             }
-            if (dirty) {
-                saveBindingConfig(next);
-                return next;
-            }
-            return prev;
+            return dirty ? next : prev;
         });
+        void committed.then(() => { if (!cancelled) setConfig(loadBindingConfig()); }, () => undefined);
+        return () => { cancelled = true; };
     }, [isLoaded, apiConfigs, voiceConfigs, presets, worldBooks, regexes, identities]);
 
     // Navigation management
@@ -280,7 +281,7 @@ export function BindingManager() {
 
     const persist = (newConfig: BindingConfig) => {
         setConfig(newConfig);
-        saveBindingConfig(newConfig);
+        saveBindingConfig(newConfig, true, config);
     };
 
     const updateGlobalSlot = (field: keyof BindingSlot, value: string | string[] | undefined) => {

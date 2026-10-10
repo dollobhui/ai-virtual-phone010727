@@ -415,7 +415,7 @@ function applyAppDefaultBinding(app: InstalledCustomApp, slot: BindingSlot): boo
     regexIds: slot.regexIds ? [...slot.regexIds] : appDefaults[appBindingId]?.regexIds,
     worldBookIds: slot.worldBookIds ? [...slot.worldBookIds] : appDefaults[appBindingId]?.worldBookIds,
   };
-  saveBindingConfig({ ...config, appDefaults });
+  saveBindingConfig({ ...config, appDefaults }, true, config);
   return true;
 }
 
@@ -490,7 +490,7 @@ export function removeCustomAppRegistrations(
   const bindingRemoved = Boolean(appDefaults[appBindingId]);
   if (bindingRemoved) {
     delete appDefaults[appBindingId];
-    saveBindingConfig({ ...config, appDefaults });
+    saveBindingConfig({ ...config, appDefaults }, true, config);
   }
 
   if (!options.deleteResources) {

@@ -226,9 +226,9 @@ export function QuickActionFloat() {
         ? (config.globalDefaults.worldBookIds || []).map(id => itemName(worldBooks, id)).filter(Boolean)
         : [];
 
-    const persistConfig = useCallback((next: BindingConfig) => {
+    const persistConfig = useCallback((next: BindingConfig, previous: BindingConfig) => {
         setConfig(next);
-        saveBindingConfig(next);
+        saveBindingConfig(next, true, previous);
     }, []);
 
     const updateApiConfig = async (apiConfigId: string | undefined) => {
@@ -236,7 +236,7 @@ export function QuickActionFloat() {
         setApiError("");
         if (scope === "global") {
             const latest = loadBindingConfig();
-            persistConfig({ ...latest, globalDefaults: { ...latest.globalDefaults, apiConfigId: apiConfigId || undefined } });
+            persistConfig({ ...latest, globalDefaults: { ...latest.globalDefaults, apiConfigId: apiConfigId || undefined } }, latest);
             return;
         }
         if (!selectedCharId) return;
@@ -249,7 +249,7 @@ export function QuickActionFloat() {
     const updateWorldBooks = useCallback((worldBookIds: string[]) => {
         const nextIds = worldBookIds.length > 0 ? worldBookIds : undefined;
         if (scope === "global") {
-            persistConfig({ ...config, globalDefaults: { ...config.globalDefaults, worldBookIds: nextIds } });
+            persistConfig({ ...config, globalDefaults: { ...config.globalDefaults, worldBookIds: nextIds } }, config);
             return;
         }
         if (!selectedCharId) return;
@@ -257,7 +257,7 @@ export function QuickActionFloat() {
         persistConfig(setCharacterBinding(config, {
             ...binding,
             defaults: { ...binding.defaults, worldBookIds: nextIds },
-        }));
+        }), config);
     }, [config, persistConfig, scope, selectedCharId]);
 
     const toggleWorldBook = useCallback((worldBookId: string) => {
@@ -399,8 +399,8 @@ export function QuickActionFloat() {
     const inheritApiLabel = scope === "global"
         ? "未设置"
         : inheritedApiName
-            ? `继承全局：${inheritedApiName}`
-            : "继承全局";
+            ? `当前来源：默认 API（${inheritedApiName}）`
+            : "当前来源：默认 API";
     const inheritWorldBookLabel = scope === "global"
         ? "未设置"
         : inheritedWorldBookNames.length > 0

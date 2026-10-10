@@ -40,7 +40,7 @@ import {
     readRegexesCache, writeRegexesCache,
     hydrateSettingsDb,
 } from "./settings-db";
-import { kvGet, kvSet, kvRemove, kvUpdateCommitted, registerKvMigration } from "./kv-db";
+import { kvGet, kvSet, kvRemove, kvUpdateCommitted, kvUpdateManyCommitted, hydrateKvDb, registerKvMigration } from "./kv-db";
 import { cancelOnlineTextGenerationsForMissingApis, withOnlineTextSwitch } from "./online-text-generation";
 import { isGenerationParameterKey } from "./generation-parameters";
 import { loadCharacters } from "./character-storage";
@@ -655,29 +655,31 @@ export function loadApiConfigs(): ApiConfig[] {
     }
 }
 
-export function saveApiConfigs(configs: ApiConfig[]): void {
-    if (typeof window === "undefined") return;
-    const validIds = new Set(configs.map(config => config.id));
-    const removedIds = new Set(loadApiConfigs().filter(config => !validIds.has(config.id)).map(config => config.id));
-    if (removedIds.size) {
-        let bindings = loadBindingConfig();
-        const characterIds = new Set([...loadCharacters().map(character => character.id), ...bindings.characterBindings.map(binding => binding.characterId)]);
-        let changed = false;
-        for (const characterId of characterIds) {
-            const slot = resolveBinding(bindings, characterId, "chat");
-            if (!slot.apiConfigId || !removedIds.has(slot.apiConfigId)) continue;
-            const binding = getCharacterBinding(bindings, characterId);
-            // Keep an invalid reference in the existing chat override, never a second API binding.
-            bindings = setCharacterBinding(bindings, { ...binding, appOverrides: {
-                ...binding.appOverrides, chat: { ...binding.appOverrides.chat, apiConfigId: slot.apiConfigId },
-            } });
-            changed = true;
-        }
-        if (changed) saveBindingConfig(bindings);
-    }
-    kvSet(API_CONFIGS_KEY, JSON.stringify(configs.map(normalizeApiConfig)));
-    cancelOnlineTextGenerationsForMissingApis(validIds);
-    window.dispatchEvent(new CustomEvent("settings-api-configs-updated"));
+export function saveApiConfigs(configs: ApiConfig[], previous = loadApiConfigs()): Promise<void> {
+    if (typeof window === "undefined") return Promise.resolve();
+    const before = snapshot(previous.map(normalizeApiConfig)), after = snapshot(configs.map(normalizeApiConfig));
+    return enqueueSettingsCommit(async () => {
+        const values = await kvUpdateManyCommitted([API_CONFIGS_KEY, BINDINGS_KEY], raw => {
+            const latest = (JSON.parse(raw[API_CONFIGS_KEY] ?? "[]") as ApiConfig[]).map(normalizeApiConfig);
+            const next = mergeRecordChanges(latest, before, after, "id");
+            const validIds = new Set(next.map(config => config.id));
+            const removedIds = new Set(latest.filter(config => !validIds.has(config.id)).map(config => config.id));
+            let bindings = parseCommittedBindings(raw[BINDINGS_KEY]);
+            const characterIds = new Set([...loadCharacters().map(character => character.id), ...bindings.characterBindings.map(binding => binding.characterId)]);
+            for (const characterId of characterIds) {
+                const slot = resolveBinding(bindings, characterId, "chat");
+                if (!slot.apiConfigId || !removedIds.has(slot.apiConfigId)) continue;
+                const binding = getCharacterBinding(bindings, characterId);
+                bindings = setCharacterBinding(bindings, { ...binding, appOverrides: {
+                    ...binding.appOverrides, chat: { ...binding.appOverrides.chat, apiConfigId: slot.apiConfigId },
+                } });
+            }
+            return { [API_CONFIGS_KEY]: JSON.stringify(next), [BINDINGS_KEY]: JSON.stringify(bindings) };
+        });
+        cancelOnlineTextGenerationsForMissingApis(new Set((JSON.parse(values[API_CONFIGS_KEY]) as ApiConfig[]).map(config => config.id)));
+        window.dispatchEvent(new CustomEvent("settings-bindings-updated"));
+        window.dispatchEvent(new CustomEvent("settings-api-configs-updated"));
+    });
 }
 
 // --- Voice Configs ──────────────────────────────────────────
@@ -881,6 +883,56 @@ const DEFAULT_BINDING_CONFIG: BindingConfig = {
     characterBindings: []
 };
 
+// These writers share an ordered commit path, not another binding or API state.
+let settingsCommit: Promise<void> = Promise.resolve();
+function enqueueSettingsCommit(operation: () => Promise<void>): Promise<void> {
+    const task = settingsCommit.then(async () => { await hydrateKvDb(); await operation(); });
+    settingsCommit = task.catch(() => undefined);
+    // Existing synchronous callers may ignore the promise; awaiting callers still receive errors.
+    void task.catch(error => console.warn("[Settings] commit failed:", error));
+    return task;
+}
+
+function snapshot<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Apply only the caller's edits to the latest document, retaining unrelated commits. */
+function mergeObjectChanges(latest: Record<string, unknown>, before: Record<string, unknown>, after: Record<string, unknown>) {
+    const next = { ...latest };
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+        if (JSON.stringify(before[key]) === JSON.stringify(after[key])) continue;
+        if (!(key in after)) delete next[key];
+        else if (isRecord(after[key])) next[key] = mergeObjectChanges(
+            isRecord(latest[key]) ? latest[key] : {}, isRecord(before[key]) ? before[key] : {}, after[key]);
+        else next[key] = after[key];
+    }
+    return next;
+}
+
+function mergeRecordChanges<T extends object>(latest: T[], before: T[], after: T[], idKey: keyof T): T[] {
+    const next = [...latest];
+    for (const id of new Set([...before, ...after].map(record => record[idKey]))) {
+        const old = before.find(record => record[idKey] === id), edited = after.find(record => record[idKey] === id);
+        if (JSON.stringify(old) === JSON.stringify(edited)) continue;
+        const index = next.findIndex(record => record[idKey] === id);
+        if (!edited) { if (index >= 0) next.splice(index, 1); continue; }
+        // An edit to a previously existing record must not resurrect a concurrent deletion.
+        if (index < 0 && old) continue;
+        const merged = mergeObjectChanges((next[index] ?? {}) as Record<string, unknown>,
+            (old ?? {}) as Record<string, unknown>, edited as Record<string, unknown>) as T;
+        if (index >= 0) next[index] = merged;
+        else next.push(merged);
+    }
+    return next;
+}
+
+function parseCommittedBindings(raw: string | null): BindingConfig {
+    return raw ? normalizeBindingConfig(JSON.parse(raw) as BindingConfig).config
+        : snapshot(migrateLegacyOverrides() ?? DEFAULT_BINDING_CONFIG);
+}
+
 function normalizeBindingConfig(config: BindingConfig): { config: BindingConfig; changed: boolean } {
     let changed = false;
     const characterBindings = config.characterBindings.map(binding => {
@@ -920,23 +972,35 @@ export function loadBindingConfig(): BindingConfig {
             // Attempt migration from legacy overrides
             const migrated = migrateLegacyOverrides();
             if (migrated) {
-                saveBindingConfig(migrated, false);
+                saveBindingConfig(migrated, false, DEFAULT_BINDING_CONFIG);
                 return migrated;
             }
             return { ...DEFAULT_BINDING_CONFIG };
         }
-        const normalized = normalizeBindingConfig(JSON.parse(raw) as BindingConfig);
-        if (normalized.changed) saveBindingConfig(normalized.config, false);
+        const parsed = JSON.parse(raw) as BindingConfig;
+        const normalized = normalizeBindingConfig(parsed);
+        if (normalized.changed) saveBindingConfig(normalized.config, false, parsed);
         return normalized.config;
     } catch {
         return { ...DEFAULT_BINDING_CONFIG };
     }
 }
 
-export function saveBindingConfig(config: BindingConfig, notify: boolean = true): void {
-    if (typeof window === "undefined") return;
-    kvSet(BINDINGS_KEY, JSON.stringify(config));
-    if (notify) window.dispatchEvent(new CustomEvent("settings-bindings-updated"));
+export function saveBindingConfig(config: BindingConfig | ((latest: BindingConfig) => BindingConfig), notify: boolean = true, previous = loadBindingConfig()): Promise<void> {
+    if (typeof window === "undefined") return Promise.resolve();
+    const before = snapshot(previous), after = typeof config === "function" ? null : snapshot(config);
+    return enqueueSettingsCommit(async () => {
+        await kvUpdateCommitted(BINDINGS_KEY, raw => {
+            const latest = parseCommittedBindings(raw);
+            if (typeof config === "function") return JSON.stringify(config(latest));
+            const { characterBindings: oldRoles, ...oldRest } = before;
+            const { characterBindings: editedRoles, ...editedRest } = after!;
+            const { characterBindings: latestRoles, ...latestRest } = latest;
+            return JSON.stringify({ ...mergeObjectChanges(latestRest, oldRest, editedRest),
+                characterBindings: mergeRecordChanges(latestRoles, oldRoles, editedRoles, "characterId") });
+        });
+        if (notify) window.dispatchEvent(new CustomEvent("settings-bindings-updated"));
+    });
 }
 
 /**
@@ -946,37 +1010,39 @@ export function saveBindingConfig(config: BindingConfig, notify: boolean = true)
  * 消灭"没绑却悄悄用了第一个"的静默兜底（多身份用户曾因此身份错乱进记忆）。
  * 列表为空的项保持缺省。应用启动和绑定界面加载时各跑一次即可，不在热路径调用。
  */
-export function ensureGlobalBindingDefaults(): void {
+export async function ensureGlobalBindingDefaults(): Promise<void> {
     if (typeof window === "undefined") return;
-    const config = loadBindingConfig();
-    const global = config.globalDefaults;
-    let changed = false;
-
-    const apiConfigs = loadApiConfigs();
-    if (apiConfigs.length > 0 && !apiConfigs.some(c => c.id === global.apiConfigId)) {
-        global.apiConfigId = apiConfigs[0].id;
-        changed = true;
-    }
-    const presets = loadPresets();
-    if (presets.length > 0 && !presets.some(p => p.id === global.presetId)) {
-        global.presetId = (presets.find(p => p.builtIn) ?? presets[0]).id;
-        changed = true;
-    }
-    const identities = loadUserIdentities();
-    if (identities.length > 0 && !identities.some(i => i.id === global.userIdentityId)) {
-        global.userIdentityId = identities[0].id;
-        changed = true;
-    }
-
-    if (changed) saveBindingConfig(config);
+    await saveBindingConfig(config => {
+        const global = config.globalDefaults;
+        const apiConfigs = loadApiConfigs();
+        if (apiConfigs.length > 0 && !apiConfigs.some(c => c.id === global.apiConfigId)) {
+            global.apiConfigId = apiConfigs[0].id;
+        }
+        const presets = loadPresets();
+        if (presets.length > 0 && !presets.some(p => p.id === global.presetId)) {
+            global.presetId = (presets.find(p => p.builtIn) ?? presets[0]).id;
+        }
+        const identities = loadUserIdentities();
+        if (identities.length > 0 && !identities.some(i => i.id === global.userIdentityId)) {
+            global.userIdentityId = identities[0].id;
+        }
+        return config;
+    });
 }
 
 /**
  * 删除 API 配置后清理绑定里的悬空引用。
  * 聊天保留失效引用等待手选；其他应用仍按原规则清理，避免剧情页面使用悬空配置。
  */
-export function removeApiConfigReferences(apiConfigId: string): void {
-    const config = loadBindingConfig();
+export function removeApiConfigReferences(apiConfigId: string): Promise<void> {
+    if (typeof window === "undefined") return Promise.resolve();
+    return enqueueSettingsCommit(async () => {
+        await kvUpdateCommitted(BINDINGS_KEY, raw => JSON.stringify(cleanApiConfigReferences(parseCommittedBindings(raw), apiConfigId)));
+        window.dispatchEvent(new CustomEvent("settings-bindings-updated"));
+    });
+}
+
+function cleanApiConfigReferences(config: BindingConfig, apiConfigId: string): BindingConfig {
     let changed = false;
     const cleanSlot = (slot: BindingSlot): BindingSlot => {
         if (slot.apiConfigId !== apiConfigId) return slot;
@@ -1018,7 +1084,7 @@ export function removeApiConfigReferences(apiConfigId: string): void {
             changed = true;
         }
     }
-    if (changed) saveBindingConfig(next);
+    return changed ? next : config;
 }
 
 export function getCharacterBinding(config: BindingConfig, characterId: string): CharacterBinding {
@@ -1053,21 +1119,22 @@ export async function saveCharacterApiConfig(characterId: string, apiConfigId?: 
     if (!characterId) throw new Error("请选择角色");
     await withOnlineTextSwitch(characterId, async () => {
         // The latest committed document prevents overwriting another role's selection.
-        await kvUpdateCommitted(BINDINGS_KEY, (raw, dependencies) => {
-            const apiConfigs = JSON.parse(dependencies[API_CONFIGS_KEY] ?? "[]") as ApiConfig[];
-            if (apiConfigId && !apiConfigs.some(config => config.id === apiConfigId)) throw new Error("该 API 配置已删除，请重新选择");
-            const config = raw ? normalizeBindingConfig(JSON.parse(raw) as BindingConfig).config
-                : loadBindingConfig();
-            const binding = getCharacterBinding(config, characterId);
-            return JSON.stringify(setCharacterBinding(config, {
-                ...binding,
-                defaults: { ...binding.defaults, apiConfigId: apiConfigId || undefined },
-                appOverrides: binding.appOverrides.chat?.apiConfigId || config.appDefaults?.chat?.apiConfigId
-                    ? { ...binding.appOverrides, chat: { ...binding.appOverrides.chat, apiConfigId: apiConfigId || undefined } }
-                    : binding.appOverrides,
-            }));
-        }, [API_CONFIGS_KEY]);
-        window.dispatchEvent(new CustomEvent("settings-bindings-updated"));
+        await enqueueSettingsCommit(async () => {
+            await kvUpdateCommitted(BINDINGS_KEY, (raw, dependencies) => {
+                const apiConfigs = JSON.parse(dependencies[API_CONFIGS_KEY] ?? "[]") as ApiConfig[];
+                if (apiConfigId && !apiConfigs.some(config => config.id === apiConfigId)) throw new Error("该 API 配置已删除，请重新选择");
+                const config = parseCommittedBindings(raw);
+                const binding = getCharacterBinding(config, characterId);
+                return JSON.stringify(setCharacterBinding(config, {
+                    ...binding,
+                    defaults: { ...binding.defaults, apiConfigId: apiConfigId || undefined },
+                    appOverrides: binding.appOverrides.chat?.apiConfigId || config.appDefaults?.chat?.apiConfigId
+                        ? { ...binding.appOverrides, chat: { ...binding.appOverrides.chat, apiConfigId: apiConfigId || undefined } }
+                        : binding.appOverrides,
+                }));
+            }, [API_CONFIGS_KEY]);
+            window.dispatchEvent(new CustomEvent("settings-bindings-updated"));
+        });
     });
 }
 

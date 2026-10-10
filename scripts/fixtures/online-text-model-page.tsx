@@ -66,7 +66,7 @@ export default function Fixture() {
                 const run = beginOnlineTextGeneration(session.contactId, "next");
                 setStop(() => run.finish);
             }}>{stop ? "结束后台生成" : "模拟后台生成"}</button>
-            <button onClick={() => { saveApiConfigs(JSON.parse(kvGet("ai_phone_api_configs_v1") || "[]").filter((item: { id: string }) => item.id !== "next")); removeApiConfigReferences("next"); }}>删除收藏配置</button>
+            <button onClick={async () => { await saveApiConfigs(JSON.parse(kvGet("ai_phone_api_configs_v1") || "[]").filter((item: { id: string }) => item.id !== "next")); await removeApiConfigReferences("next"); }}>删除收藏配置</button>
             <button onClick={() => { const apis = JSON.parse(kvGet("ai_phone_api_configs_v1") || "[]"); saveApiConfigs([...apis, ...Array.from({ length: 40 }, (_, index) => ({ ...apis[0], id: `extra-${index}`, name: `列表配置 ${index}` }))]); }}>增加列表配置</button>
             <button onClick={() => saveApiConfigs(JSON.parse(kvGet("ai_phone_api_configs_v1") || "[]").filter((item: { id: string }) => !item.id.startsWith("extra-")))}>恢复配置列表</button>
             <button onClick={() => setSnapshot(JSON.stringify({ bindings: loadBindingConfig(), messages: session ? loadChatMessages(session.id) : [], apis: JSON.parse(kvGet("ai_phone_api_configs_v1") || "[]") }))}>读取状态</button>
