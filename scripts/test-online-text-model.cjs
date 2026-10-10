@@ -29,139 +29,137 @@ const storage = require('../lib/settings-storage.ts');
 const state = require('../lib/online-text-generation.ts');
 const db = new Dexie('AiPhoneKvDB');
 db.version(1).stores({ entries: 'key' });
-const bindingKey = 'ai_phone_bindings_v1';
-const apiKey = 'ai_phone_api_configs_v1';
+const bindingKey = 'ai_phone_bindings_v1', apiKey = 'ai_phone_api_configs_v1';
 const apis = ['base', 'next', 'other'].map(id => ({ id, name: id + ' config', provider: 'OpenAI', apiKey: 'saved-test-key',
     baseUrl: 'https://example.test/v1', defaultModel: id + '-model', enableImageRecognition: false, enableImageGeneration: false }));
 const baseline = { appDefaults: {}, globalDefaults: { apiConfigId: 'base', presetId: 'preset', worldBookIds: ['world'], voiceConfigId: 'voice' },
-    characterBindings: [{ characterId: 'alice', defaults: {}, appOverrides: { chat: { regexIds: ['regex'] }, story: { apiConfigId: 'other' } } }] };
+    characterBindings: [{ characterId: 'alice', defaults: {}, appOverrides: { chat: { regexIds: ['regex'] }, story: { apiConfigId: 'other' } } },
+        { characterId: 'bob', defaults: { apiConfigId: 'other' }, appOverrides: {} }] };
 const persisted = async () => JSON.parse((await db.table('entries').get(bindingKey)).value);
-const seed = async () => {
+const seed = async (config = baseline) => {
     await kv.kvSetAsync(apiKey, JSON.stringify(apis));
-    await kv.kvSetAsync(bindingKey, JSON.stringify(baseline));
+    await kv.kvSetAsync(bindingKey, JSON.stringify(config));
 };
+const chat = (config, id = 'alice') => storage.resolveBinding(config, id, 'chat');
 
-test('independent online text API lifecycle', async t => {
+test('shared character API lifecycle', async t => {
     await kv.hydrateKvDb();
-    await seed();
-    await t.test('old bindings keep the original resolution', () => {
-        assert.deepEqual(storage.resolveOnlineTextBinding(storage.loadBindingConfig(), 'alice'), storage.resolveBinding(baseline, 'alice', 'chat'));
-    });
-    await t.test('selection commits only one role API and keeps all other fields', async () => {
-        const originalApis = storage.loadApiConfigs();
-        await storage.saveOnlineTextApiConfig('alice', 'next');
-        const saved = await persisted();
-        assert.deepEqual(saved.characterBindings[0], { ...baseline.characterBindings[0], onlineText: { apiConfigId: 'next' } });
-        const effective = storage.resolveOnlineTextBinding(saved, 'alice');
-        assert.equal(effective.apiConfigId, 'next');
-        assert.equal(effective.presetId, 'preset');
-        assert.deepEqual(effective.worldBookIds, ['world']);
-        assert.equal(effective.voiceConfigId, 'voice');
-        assert.deepEqual(effective.regexIds, ['regex']);
-        for (const app of ['chat', 'story', 'diary', 'group_chat']) {
-            assert.deepEqual(storage.resolveBinding(saved, 'alice', app), storage.resolveBinding(baseline, 'alice', app));
+    await require('../lib/settings-db.ts').hydrateSettingsDb();
+    await t.test('legacy onlineText and selectionRequired are inert and never promoted', async () => {
+        const legacy = structuredClone(baseline);
+        legacy.selectionRequired = true;
+        legacy.characterBindings[0].selectionRequired = true;
+        legacy.characterBindings[0].onlineText = { apiConfigId: 'deleted-legacy', selectionRequired: true };
+        await seed(legacy);
+        for (let pass = 0; pass < 3; pass++) {
+            assert.equal(chat(storage.loadBindingConfig()).apiConfigId, 'base');
+            assert.deepEqual(storage.getCharacterChatApiSelection(storage.loadBindingConfig(), 'alice'), { apiConfigId: 'base', inherits: true });
         }
-        assert.equal(storage.resolveOnlineTextBinding(saved, 'bob').apiConfigId, 'base');
+        assert.deepEqual(await persisted(), legacy);
+        await storage.saveCharacterApiConfig('alice', 'next');
+        const saved = await persisted();
+        assert.deepEqual(saved.characterBindings[0].onlineText, legacy.characterBindings[0].onlineText);
+        assert.equal(chat(saved).apiConfigId, 'next');
+    });
+    await t.test('shared selection writes original defaults and keeps every non-API field and API object', async () => {
+        await seed(); const originalApis = storage.loadApiConfigs();
+        await storage.saveCharacterApiConfig('alice', 'next');
+        const saved = await persisted();
+        const expected = structuredClone(baseline); expected.characterBindings[0].defaults.apiConfigId = 'next';
+        assert.deepEqual(saved, expected);
         assert.deepEqual(storage.loadApiConfigs(), originalApis);
+        assert.deepEqual(chat(saved), { ...chat(baseline), apiConfigId: 'next' });
+        assert.deepEqual(saved.characterBindings[1], baseline.characterBindings[1]);
     });
-    await t.test('concurrent saves for different roles do not overwrite each other', async () => {
-        await Promise.all([storage.saveOnlineTextApiConfig('alice', 'next'), storage.saveOnlineTextApiConfig('bob', 'other')]);
+    await t.test('existing chat override is displayed and explicit selection updates it without changing other slots', async () => {
+        const config = structuredClone(baseline); config.characterBindings[0].appOverrides.chat.apiConfigId = 'other';
+        await seed(config);
+        assert.equal(storage.getCharacterChatApiSelection(config, 'alice').apiConfigId, 'other');
+        await storage.saveCharacterApiConfig('alice', 'next');
         const saved = await persisted();
-        assert.equal(storage.resolveOnlineTextBinding(saved, 'alice').apiConfigId, 'next');
-        assert.equal(storage.resolveOnlineTextBinding(saved, 'bob').apiConfigId, 'other');
+        assert.equal(saved.characterBindings[0].defaults.apiConfigId, 'next');
+        assert.deepEqual(saved.characterBindings[0].appOverrides.chat, { apiConfigId: 'next', regexIds: ['regex'] });
+        assert.deepEqual(saved.characterBindings[0].appOverrides.story, config.characterBindings[0].appOverrides.story);
+        assert.deepEqual(chat(saved), { ...chat(config), apiConfigId: 'next' });
     });
-    await t.test('legacy editors cannot erase selections from a stale snapshot', async () => {
-        storage.saveBindingConfig({ ...baseline, globalDefaults: { ...baseline.globalDefaults, presetId: 'changed-preset' } });
-        assert.equal(storage.resolveOnlineTextBinding(storage.loadBindingConfig(), 'alice').apiConfigId, 'next');
-        assert.equal(storage.resolveOnlineTextBinding(storage.loadBindingConfig(), 'bob').apiConfigId, 'other');
+    await t.test('app defaults retain priority and explicit role choice cannot be shadowed', async () => {
+        const config = structuredClone(baseline); config.appDefaults.chat = { apiConfigId: 'other', presetId: 'app-preset' };
+        await seed(config); assert.equal(chat(config).apiConfigId, 'other');
+        await storage.saveCharacterApiConfig('alice', 'next');
+        const saved = await persisted();
+        assert.equal(chat(saved).apiConfigId, 'next'); assert.equal(chat(saved).presetId, 'app-preset');
+        assert.deepEqual(saved.appDefaults, config.appDefaults);
+        assert.equal(chat(saved, 'bob').apiConfigId, 'other');
+        await storage.saveCharacterApiConfig('alice');
+        const inherited = await persisted();
+        assert.equal(chat(inherited).apiConfigId, 'other');
+        assert.equal(storage.getCharacterChatApiSelection(inherited, 'alice').inherits, true);
+        assert.deepEqual(inherited.characterBindings[0].appOverrides.chat, { regexIds: ['regex'] });
     });
-    await t.test('scope classifier excludes calls, offline, theater, groups and other apps', () => {
-        assert.equal(state.isOrdinaryOnlineTextRequest(false, { appTags: ['chat', 'text'] }), true);
-        assert.equal(state.isOrdinaryOnlineTextRequest(false, { appTags: ['chat', 'text', 'followup'] }), true);
-        for (const tags of [['chat'], ['chat', 'offline'], ['chat', 'voice'], ['chat', 'video'], ['chat', 'text', 'voice']]) {
-            assert.equal(state.isOrdinaryOnlineTextRequest(false, { appTags: tags }), false);
-        }
-        assert.equal(state.isOrdinaryOnlineTextRequest(true, { appTags: ['chat', 'text'] }), false);
-        assert.equal(state.isOrdinaryOnlineTextRequest(false, { appId: 'diary', appTags: ['chat', 'text'] }), false);
+    await t.test('original inheritance and override order remains intact', () => {
+        const config = structuredClone(baseline);
+        assert.equal(chat(config).apiConfigId, 'base');
+        config.characterBindings[0].defaults.apiConfigId = 'next'; assert.equal(chat(config).apiConfigId, 'next');
+        config.appDefaults.chat = { apiConfigId: 'other' }; assert.equal(chat(config).apiConfigId, 'other');
+        config.characterBindings[0].appOverrides.chat.apiConfigId = 'base'; assert.equal(chat(config).apiConfigId, 'base');
     });
-    await t.test('generation prevents selection, including programmatic calls', async () => {
-        const run = state.beginOnlineTextGeneration('alice', 'next');
-        const before = await persisted();
-        await assert.rejects(storage.saveOnlineTextApiConfig('alice', 'other'), state.OnlineTextBusyError);
-        assert.deepEqual(await persisted(), before);
-        run.finish();
-        assert.equal(state.isOnlineTextBusy('alice'), false);
+    await t.test('concurrent different roles persist independently', async () => {
+        await seed(); await Promise.all([storage.saveCharacterApiConfig('alice', 'next'), storage.saveCharacterApiConfig('bob', 'base')]);
+        const saved = await persisted(); assert.equal(chat(saved).apiConfigId, 'next'); assert.equal(chat(saved, 'bob').apiConfigId, 'base');
     });
-    await t.test('saving prevents a new generation and releases its lock on error', async () => {
-        let release;
-        const saving = state.withOnlineTextSwitch('alice', () => new Promise(resolve => { release = resolve; }));
-        assert.throws(() => state.beginOnlineTextGeneration('alice', 'next'), state.OnlineTextBusyError);
+    await t.test('generation prevents either picker from saving and inheritance from bypassing the lock', async () => {
+        await seed(); const before = await persisted(), run = state.beginOnlineTextGeneration('alice', 'base');
+        await assert.rejects(storage.saveCharacterApiConfig('alice', 'next'), state.OnlineTextBusyError);
+        await assert.rejects(storage.saveCharacterApiConfig('alice'), state.OnlineTextBusyError);
+        assert.deepEqual(await persisted(), before); run.finish();
+    });
+    await t.test('pending save blocks generation and failure releases the guard', async () => {
+        let release; const saving = state.withOnlineTextSwitch('alice', () => new Promise(resolve => { release = resolve; }));
+        assert.throws(() => state.beginOnlineTextGeneration('alice', 'base'), state.OnlineTextBusyError);
         release(); await saving;
         await assert.rejects(state.withOnlineTextSwitch('alice', async () => { throw new Error('write failed'); }), /write failed/);
         assert.equal(state.isOnlineTextBusy('alice'), false);
     });
-    await t.test('transaction failure keeps cache and disk and sends no success event', async () => {
-        const before = await persisted();
-        let notices = 0;
-        const listener = () => notices++;
-        events.addEventListener('settings-bindings-updated', listener);
-        const tablePrototype = Object.getPrototypeOf(Object.getPrototypeOf(db.table('entries')));
-        const put = tablePrototype.put;
-        tablePrototype.put = function(value, ...args) {
-            if (value.key === bindingKey) return Promise.reject(new Error('simulated quota failure'));
-            return put.call(this, value, ...args);
-        };
-        try { await assert.rejects(storage.saveOnlineTextApiConfig('alice', 'other'), /simulated quota failure/); }
-        finally { tablePrototype.put = put; events.removeEventListener('settings-bindings-updated', listener); }
-        assert.deepEqual(storage.loadBindingConfig(), before);
-        assert.deepEqual(await persisted(), before);
-        assert.equal(notices, 0);
+    await t.test('failed transaction keeps cache and durable binding and never announces success', async () => {
+        await seed(); const before = await persisted(); let notices = 0;
+        const listener = () => notices++; events.addEventListener('settings-bindings-updated', listener);
+        const proto = Object.getPrototypeOf(Object.getPrototypeOf(db.table('entries'))), put = proto.put;
+        proto.put = function(value, ...args) { return value.key === bindingKey ? Promise.reject(new Error('simulated quota failure')) : put.call(this, value, ...args); };
+        try { await assert.rejects(storage.saveCharacterApiConfig('alice', 'next'), /simulated quota failure/); }
+        finally { proto.put = put; events.removeEventListener('settings-bindings-updated', listener); }
+        assert.deepEqual(storage.loadBindingConfig(), before); assert.deepEqual(await persisted(), before); assert.equal(notices, 0);
     });
-    await t.test('delete cancels only affected text runs and preserves the invalid ID', async () => {
-        const run = state.beginOnlineTextGeneration('alice', 'next');
-        const otherRun = state.beginOnlineTextGeneration('bob', 'other');
-        storage.saveApiConfigs(apis.filter(api => api.id !== 'next'));
-        storage.removeApiConfigReferences('next');
-        storage.ensureGlobalBindingDefaults();
-        assert.equal(run.signal.aborted, true);
-        assert.ok(run.signal.reason instanceof state.OnlineTextApiUnavailableError);
-        assert.equal(otherRun.signal.aborted, false);
-        assert.equal(storage.resolveOnlineTextBinding(storage.loadBindingConfig(), 'alice').apiConfigId, 'next');
-        assert.equal(storage.loadApiConfigs().some(api => api.id === 'next'), false);
-        run.finish(); otherRun.finish();
-        await assert.rejects(storage.saveOnlineTextApiConfig('alice', 'next'), /已删除/);
-        await storage.saveOnlineTextApiConfig('alice', 'other');
-        assert.equal((await persisted()).characterBindings[0].onlineText.apiConfigId, 'other');
-    });
-    await t.test('target validation reads the committed API list rather than stale cache', async () => {
-        await seed();
-        await db.table('entries').put({ key: apiKey, value: JSON.stringify(apis.filter(api => api.id !== 'next')) });
-        assert.equal(storage.loadApiConfigs().some(api => api.id === 'next'), true);
-        await assert.rejects(storage.saveOnlineTextApiConfig('alice', 'next'), /已删除/);
-        assert.deepEqual(await persisted(), baseline);
-    });
-    await t.test('a legacy save during a pending switch cannot erase the committed selection', async () => {
-        await seed();
-        const selection = storage.saveOnlineTextApiConfig('alice', 'next');
-        storage.saveBindingConfig({ ...baseline, globalDefaults: { ...baseline.globalDefaults, presetId: 'edited-preset' } });
-        await selection;
-        // A read-write barrier waits for the queued legacy transaction too.
-        await kv.kvUpdateCommitted(bindingKey, raw => raw);
-        const saved = await persisted();
-        assert.equal(saved.characterBindings[0].onlineText.apiConfigId, 'next');
-        assert.equal(saved.globalDefaults.presetId, 'edited-preset');
-        assert.equal(storage.loadBindingConfig().characterBindings[0].onlineText.apiConfigId, 'next');
-    });
-    await t.test('deleting a previously inherited API also pauses text before default cleanup', async () => {
-        await seed();
+    await t.test('deletion freezes inherited chat API, cancels only affected runs and survives default cleanup', async () => {
+        await seed(); const run = state.beginOnlineTextGeneration('alice', 'base'), other = state.beginOnlineTextGeneration('bob', 'other');
         storage.saveApiConfigs(apis.filter(api => api.id !== 'base'));
-        storage.removeApiConfigReferences('base');
-        storage.ensureGlobalBindingDefaults();
+        storage.removeApiConfigReferences('base'); storage.ensureGlobalBindingDefaults();
+        await kv.kvUpdateCommitted(bindingKey, raw => raw);
+        assert.equal(run.signal.aborted, true); assert.ok(run.signal.reason instanceof state.OnlineTextApiUnavailableError);
+        assert.equal(other.signal.aborted, false);
+        const saved = await persisted(); assert.equal(chat(saved).apiConfigId, 'base'); assert.equal(chat(saved, 'bob').apiConfigId, 'other');
+        assert.equal(saved.characterBindings[0].onlineText, undefined);
+        assert.equal(saved.characterBindings[0].appOverrides.chat.apiConfigId, 'base');
+        run.finish(); other.finish();
+        await assert.rejects(storage.saveCharacterApiConfig('alice', 'base'), /已删除/);
+        await storage.saveCharacterApiConfig('alice', 'other'); assert.equal(chat(await persisted()).apiConfigId, 'other');
+    });
+    await t.test('target validation uses committed API list rather than a stale cache', async () => {
+        await seed(); await db.table('entries').put({ key: apiKey, value: JSON.stringify(apis.filter(api => api.id !== 'next')) });
+        assert.equal(storage.loadApiConfigs().some(api => api.id === 'next'), true);
+        await assert.rejects(storage.saveCharacterApiConfig('alice', 'next'), /已删除/); assert.deepEqual(await persisted(), baseline);
+    });
+    await t.test('reference cleanup alone cannot discard a missing role chat selection', async () => {
+        await seed(); await storage.saveCharacterApiConfig('alice', 'next');
+        // Simulate an external API deletion that bypasses the ordinary settings save event.
+        await kv.kvSetAsync(apiKey, JSON.stringify(apis.filter(api => api.id !== 'next')));
+        storage.removeApiConfigReferences('next');
         await kv.kvUpdateCommitted(bindingKey, raw => raw);
         const saved = await persisted();
-        assert.equal(storage.resolveOnlineTextBinding(saved, 'alice').apiConfigId, 'base');
-        assert.equal(storage.resolveBinding(saved, 'alice', 'chat').apiConfigId, 'next');
-        assert.equal(saved.characterBindings[0].onlineText.apiConfigId, 'base');
+        assert.equal(chat(saved).apiConfigId, 'next');
+        assert.equal(saved.characterBindings[0].appOverrides.chat.apiConfigId, 'next');
+        assert.equal(chat(saved, 'bob').apiConfigId, 'other');
+        storage.removeApiConfigReferences('next');
+        assert.deepEqual(storage.loadBindingConfig(), saved);
     });
     db.close();
 });

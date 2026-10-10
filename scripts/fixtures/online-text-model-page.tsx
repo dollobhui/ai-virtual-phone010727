@@ -2,13 +2,14 @@
 // Temporary browser-test route only; test runner creates and removes its page.
 import { useEffect, useState } from "react";
 import { ChatRoom } from "@/components/chat/chat-room";
+import { QuickActionFloat } from "@/components/quick-action-float";
 import { hydrateKvDb, kvGet, kvSetAsync } from "@/lib/kv-db";
 import { hydrateSettingsDb } from "@/lib/settings-db";
 import { saveCharacters } from "@/lib/character-storage";
-import { createOrGetSession, createGroupSession, hydrateChatStorage, loadChatMessages, pushChatMessage, saveChatSessions, loadChatSessions, type ChatSession } from "@/lib/chat-storage";
+import { createOrGetSession, createGroupSession, hydrateChatStorage, loadChatMessages, pushChatMessage, saveChatSessions, loadChatSessions, saveChatAppSettings, loadChatAppSettings, type ChatSession } from "@/lib/chat-storage";
 import { createPreset, createWorldBook, savePresetsAsync, saveWorldBooks, loadBindingConfig, saveApiConfigs, removeApiConfigReferences } from "@/lib/settings-storage";
 import { beginOnlineTextGeneration } from "@/lib/online-text-generation";
-import { buildChatPromptMessages } from "@/lib/chat-engine";
+import { buildChatPromptMessages, generateOfflineChatCompletion } from "@/lib/chat-engine";
 
 export default function Fixture() {
     const [session, setSession] = useState<ChatSession | null>(null);
@@ -16,6 +17,7 @@ export default function Fixture() {
     const [stop, setStop] = useState<(() => void) | null>(null);
     const [snapshot, setSnapshot] = useState("");
     const [scopes, setScopes] = useState("");
+    const [offlineResult, setOfflineResult] = useState("");
     useEffect(() => {
         void (async () => {
             await Promise.all([hydrateKvDb(), hydrateSettingsDb(), hydrateChatStorage()]);
@@ -36,8 +38,9 @@ export default function Fixture() {
                 ] };
                 await savePresetsAsync([preset]);
                 saveWorldBooks([{ ...createWorldBook("固定世界书"), id: "fixture-world", entries: [{ uid: "entry", key: "", comment: "", content: "worldbook-context", use_regex: false, disable: false, constant: true, position: "before_char", insertion_order: 1 }] }]);
-                await kvSetAsync("ai_phone_bindings_v1", JSON.stringify({ globalDefaults: { apiConfigId: "base", presetId: "fixture-preset", worldBookIds: ["fixture-world"] },
-                    characterBindings: [{ characterId: "alice", defaults: {}, appOverrides: { chat: { apiConfigId: "base" } } }] }));
+                await kvSetAsync("ai_phone_bindings_v1", JSON.stringify({ globalDefaults: { apiConfigId: "base", presetId: "fixture-preset", worldBookIds: ["fixture-world"], voiceConfigId: "fixture-voice" },
+                    selectionRequired: true,
+                    characterBindings: [{ characterId: "alice", defaults: {}, appOverrides: { chat: { apiConfigId: "base" } }, onlineText: { apiConfigId: "other", selectionRequired: true } }] }));
                 await kvSetAsync("ai_phone_config_folders_api_v1", JSON.stringify({ version: 1, folders: [{ id: "favorites", name: "收藏文件夹" }, { id: "work", name: "工作文件夹" }], order: ["__unclassified__", "favorites", "work"], assignments: { next: "favorites", other: "work" } }));
                 const alice = createOrGetSession("alice"), bob = createOrGetSession("bob");
                 createGroupSession("测试群", ["alice", "bob"]);
@@ -48,6 +51,7 @@ export default function Fixture() {
                 }
                 await kvSetAsync("online-text-fixture-seeded", "1");
             }
+            saveChatAppSettings({ ...loadChatAppSettings(), quickActionEnabled: true, floatingDockEnabled: false });
             const loaded = loadChatSessions();
             setSessions(loaded);
             setSession(loaded.find(item => item.contactId === "alice")!);
@@ -63,7 +67,11 @@ export default function Fixture() {
                 setStop(() => run.finish);
             }}>{stop ? "结束后台生成" : "模拟后台生成"}</button>
             <button onClick={() => { saveApiConfigs(JSON.parse(kvGet("ai_phone_api_configs_v1") || "[]").filter((item: { id: string }) => item.id !== "next")); removeApiConfigReferences("next"); }}>删除收藏配置</button>
+            <button onClick={() => { const apis = JSON.parse(kvGet("ai_phone_api_configs_v1") || "[]"); saveApiConfigs([...apis, ...Array.from({ length: 40 }, (_, index) => ({ ...apis[0], id: `extra-${index}`, name: `列表配置 ${index}` }))]); }}>增加列表配置</button>
+            <button onClick={() => saveApiConfigs(JSON.parse(kvGet("ai_phone_api_configs_v1") || "[]").filter((item: { id: string }) => !item.id.startsWith("extra-")))}>恢复配置列表</button>
             <button onClick={() => setSnapshot(JSON.stringify({ bindings: loadBindingConfig(), messages: session ? loadChatMessages(session.id) : [], apis: JSON.parse(kvGet("ai_phone_api_configs_v1") || "[]") }))}>读取状态</button>
+            <button onClick={() => { if (!session) return; setOfflineResult(""); void generateOfflineChatCompletion({ ...session, offlineSummaryRetry: false }, loadChatMessages(session.id))
+                .then(result => setOfflineResult(result.model)).catch(error => setOfflineResult(error.message)); }}>请求线下生成</button>
             <button onClick={() => { if (!session) return; void Promise.all(["text", "offline", "voice", "video"].map(async tag => {
                 const result = await buildChatPromptMessages(session, loadChatMessages(session.id), { appTags: ["chat", tag] });
                 return { tag, api: result.config.id, preset: result.preset?.id, messages: result.llmMessages };
@@ -71,6 +79,8 @@ export default function Fixture() {
         </nav>
         <pre data-testid="snapshot" style={{ display: "none" }}>{snapshot}</pre>
         <pre data-testid="scopes" style={{ display: "none" }}>{scopes}</pre>
+        <pre data-testid="offline-result" style={{ display: "none" }}>{offlineResult}</pre>
         {session && <ChatRoom key={session.id} session={session} onBack={() => {}} onDeleted={() => {}} />}
+        <QuickActionFloat />
     </div>;
 }

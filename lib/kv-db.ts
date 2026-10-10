@@ -189,18 +189,10 @@ export function kvGet(key: string): string | null {
 }
 
 // ── Write: update cache + fire-and-forget to IDB ──
-export function kvSet(key: string, value: string, mergeCommitted?: (existing: string | null, incoming: string) => string): void {
-    if (mergeCommitted) value = mergeCommitted(kvGet(key), value);
+export function kvSet(key: string, value: string): void {
     _cache.set(key, value);
     if (isManagedLegacyKey(key)) writeFallbackLocalStorage(key, value);
-    const write = mergeCommitted ? kvDb.transaction("rw", kvDb.entries, async () => {
-        const existing = await kvDb.entries.get(key);
-        const committed = mergeCommitted(existing?.value ?? null, value);
-        await kvDb.entries.put({ key, value: committed });
-        return committed;
-    }) : kvDb.entries.put({ key, value }).then(() => value);
-    write.then(committed => {
-        if (mergeCommitted) _cache.set(key, committed);
+    kvDb.entries.put({ key, value }).then(() => {
         if (isManagedLegacyKey(key)) removeLegacyLocalStorageKeyIfValue(key, value);
     }).catch(err => {
         writeFallbackLocalStorage(key, value);

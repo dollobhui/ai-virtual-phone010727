@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { ReactNode, Ref, KeyboardEventHandler } from "react";
 import { useState, useEffect } from "react";
 import { type LucideIcon, X, Check } from "lucide-react";
 
@@ -55,6 +55,12 @@ export type ContentDialogProps = {
   onConfirm: () => void;
   onCancel: () => void;
   children: ReactNode;
+  overlayClassName?: string;
+  dialogClassName?: string;
+  headerAction?: ReactNode;
+  dialogLabel?: string;
+  dialogRef?: Ref<HTMLDivElement>;
+  onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
 };
 
 export function ContentDialog({
@@ -64,12 +70,21 @@ export function ContentDialog({
   onConfirm,
   onCancel,
   children,
+  overlayClassName,
+  dialogClassName,
+  headerAction,
+  dialogLabel,
+  dialogRef,
+  onKeyDown,
 }: ContentDialogProps) {
   return (
-    <div className="modal-overlay" data-ui="modal" onClick={onCancel}>
-      <div className="modal-dialog" data-ui="modal-dialog" onClick={(e) => e.stopPropagation()}>
+    <div className={`modal-overlay${overlayClassName ? ` ${overlayClassName}` : ""}`} data-ui="modal" onClick={onCancel} onKeyDown={onKeyDown}>
+      <div className={`modal-dialog${dialogClassName ? ` ${dialogClassName}` : ""}`} data-ui="modal-dialog" ref={dialogRef}
+        role={dialogLabel ? "dialog" : undefined} aria-modal={dialogLabel ? true : undefined} aria-label={dialogLabel}
+        onClick={(e) => e.stopPropagation()}>
         <div className="modal-header" data-ui="modal-header">
           <h3 className="modal-title">{title}</h3>
+          {headerAction}
         </div>
         <div className="modal-body" data-ui="modal-body" style={{ textAlign: "left", width: "100%" }}>
           {children}

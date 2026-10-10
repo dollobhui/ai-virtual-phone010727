@@ -300,7 +300,7 @@ export type CharacterBinding = {
     characterId: string;
     defaults: BindingSlot;
     appOverrides: Partial<Record<string, BindingSlot>>;
-    /** Explicit API for ordinary online text only. Keep deleted IDs to prevent fallback. */
+    /** Legacy feature 11 data, retained for compatibility only; never used to resolve requests. */
     onlineText?: { apiConfigId: string };
 };
 

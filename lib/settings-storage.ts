@@ -664,12 +664,13 @@ export function saveApiConfigs(configs: ApiConfig[]): void {
         const characterIds = new Set([...loadCharacters().map(character => character.id), ...bindings.characterBindings.map(binding => binding.characterId)]);
         let changed = false;
         for (const characterId of characterIds) {
-            const slot = resolveOnlineTextBinding(bindings, characterId);
+            const slot = resolveBinding(bindings, characterId, "chat");
             if (!slot.apiConfigId || !removedIds.has(slot.apiConfigId)) continue;
             const binding = getCharacterBinding(bindings, characterId);
-            if (binding.onlineText) continue;
-            // Freeze the effective ID before legacy cleanup can erase its inheritance source.
-            bindings = setCharacterBinding(bindings, { ...binding, onlineText: { apiConfigId: slot.apiConfigId } });
+            // Keep an invalid reference in the existing chat override, never a second API binding.
+            bindings = setCharacterBinding(bindings, { ...binding, appOverrides: {
+                ...binding.appOverrides, chat: { ...binding.appOverrides.chat, apiConfigId: slot.apiConfigId },
+            } });
             changed = true;
         }
         if (changed) saveBindingConfig(bindings);
@@ -932,25 +933,9 @@ export function loadBindingConfig(): BindingConfig {
     }
 }
 
-function preserveOnlineTextSelections(raw: string | null, incoming: string): string {
-    // Legacy binding editors own the original slots, not the independent text selection.
-    // A page loaded before a switch must not erase it when saving another setting.
-    let next = JSON.parse(incoming) as BindingConfig;
-    if (raw) {
-        let previous: BindingConfig | undefined;
-        try { previous = JSON.parse(raw) as BindingConfig; } catch { /* Allow the existing editor to repair corrupt data. */ }
-        for (const binding of Array.isArray(previous?.characterBindings) ? previous.characterBindings : []) {
-            if (!binding.onlineText) continue;
-            const target = getCharacterBinding(next, binding.characterId);
-            next = setCharacterBinding(next, { ...target, onlineText: binding.onlineText });
-        }
-    }
-    return JSON.stringify(next);
-}
-
 export function saveBindingConfig(config: BindingConfig, notify: boolean = true): void {
     if (typeof window === "undefined") return;
-    kvSet(BINDINGS_KEY, JSON.stringify(config), preserveOnlineTextSelections);
+    kvSet(BINDINGS_KEY, JSON.stringify(config));
     if (notify) window.dispatchEvent(new CustomEvent("settings-bindings-updated"));
 }
 
@@ -988,7 +973,7 @@ export function ensureGlobalBindingDefaults(): void {
 
 /**
  * 删除 API 配置后清理绑定里的悬空引用。
- * 不清理的话，指向已删除配置的绑定会让配置解析抛错（剧情模式曾因此整页白屏）。
+ * 聊天保留失效引用等待手选；其他应用仍按原规则清理，避免剧情页面使用悬空配置。
  */
 export function removeApiConfigReferences(apiConfigId: string): void {
     const config = loadBindingConfig();
@@ -999,21 +984,25 @@ export function removeApiConfigReferences(apiConfigId: string): void {
         const { apiConfigId: _removed, ...rest } = slot;
         return rest;
     };
-    const cleanSlotMap = <T extends Partial<Record<string, BindingSlot>>>(slots: T): T => {
+    const cleanSlotMap = <T extends Partial<Record<string, BindingSlot>>>(slots: T, preserveChat = false): T => {
         const next: Partial<Record<string, BindingSlot>> = {};
         for (const [key, slot] of Object.entries(slots)) {
-            next[key] = slot ? cleanSlot(slot) : slot;
+            next[key] = slot && !(preserveChat && key === "chat") ? cleanSlot(slot) : slot;
         }
         return next as T;
     };
     const next: BindingConfig = {
         ...config,
         globalDefaults: cleanSlot(config.globalDefaults),
-        characterBindings: config.characterBindings.map(binding => ({
-            ...binding,
-            defaults: cleanSlot(binding.defaults),
-            appOverrides: cleanSlotMap(binding.appOverrides),
-        })),
+        characterBindings: config.characterBindings.map(binding => {
+            const chatApi = resolveBinding(config, binding.characterId, "chat").apiConfigId;
+            const appOverrides = cleanSlotMap(binding.appOverrides, true);
+            if (chatApi === apiConfigId && appOverrides.chat?.apiConfigId !== chatApi) {
+                appOverrides.chat = { ...appOverrides.chat, apiConfigId: chatApi };
+                changed = true;
+            }
+            return { ...binding, defaults: cleanSlot(binding.defaults), appOverrides };
+        }),
     };
     if (config.appDefaults) next.appDefaults = cleanSlotMap(config.appDefaults);
     const auxFields = [
@@ -1049,26 +1038,33 @@ export function setCharacterBinding(config: BindingConfig, binding: CharacterBin
     return { ...config, characterBindings: newBindings };
 }
 
-/** Only the API is overridden. Preset, world books, voice and identity remain unchanged. */
-export function resolveOnlineTextBinding(config: BindingConfig, characterId: string): BindingSlot {
-    const slot = resolveBinding(config, characterId, "chat");
-    const onlineText = config.characterBindings.find(binding => binding.characterId === characterId)?.onlineText;
-    return onlineText ? { ...slot, apiConfigId: onlineText.apiConfigId } : slot;
+/** Both API pickers show the same effective chat binding, including existing overrides. */
+export function getCharacterChatApiSelection(config: BindingConfig, characterId: string) {
+    const binding = getCharacterBinding(config, characterId);
+    return {
+        apiConfigId: resolveBinding(config, characterId, "chat").apiConfigId,
+        inherits: !binding.defaults.apiConfigId && !binding.appOverrides.chat?.apiConfigId,
+    };
 }
 
-export async function saveOnlineTextApiConfig(characterId: string, apiConfigId: string): Promise<void> {
-    if (!characterId || !apiConfigId) throw new Error("请选择有效的 API 配置");
+/** Reuse the character default API; mirror only when a chat override would shadow this choice.
+ * Clearing restores the unchanged global → character → app → character-app inheritance. */
+export async function saveCharacterApiConfig(characterId: string, apiConfigId?: string): Promise<void> {
+    if (!characterId) throw new Error("请选择角色");
     await withOnlineTextSwitch(characterId, async () => {
         // The latest committed document prevents overwriting another role's selection.
         await kvUpdateCommitted(BINDINGS_KEY, (raw, dependencies) => {
             const apiConfigs = JSON.parse(dependencies[API_CONFIGS_KEY] ?? "[]") as ApiConfig[];
-            if (!apiConfigs.some(config => config.id === apiConfigId)) throw new Error("该 API 配置已删除，请重新选择");
+            if (apiConfigId && !apiConfigs.some(config => config.id === apiConfigId)) throw new Error("该 API 配置已删除，请重新选择");
             const config = raw ? normalizeBindingConfig(JSON.parse(raw) as BindingConfig).config
                 : loadBindingConfig();
             const binding = getCharacterBinding(config, characterId);
             return JSON.stringify(setCharacterBinding(config, {
                 ...binding,
-                onlineText: { apiConfigId },
+                defaults: { ...binding.defaults, apiConfigId: apiConfigId || undefined },
+                appOverrides: binding.appOverrides.chat?.apiConfigId || config.appDefaults?.chat?.apiConfigId
+                    ? { ...binding.appOverrides, chat: { ...binding.appOverrides.chat, apiConfigId: apiConfigId || undefined } }
+                    : binding.appOverrides,
             }));
         }, [API_CONFIGS_KEY]);
         window.dispatchEvent(new CustomEvent("settings-bindings-updated"));

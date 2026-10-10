@@ -47,6 +47,7 @@ import { CONTENT_APP_IDS, CONTENT_APP_LABELS } from "@/lib/settings-types";
 import { BINDING_ACCENTS, CONTENT_APP_ACCENTS } from "@/lib/ui-accent-colors";
 import {
     loadBindingConfig,
+    resolveBinding,
     saveBindingConfig,
     getCharacterBinding,
     setCharacterBinding,
@@ -177,10 +178,10 @@ export function BindingManager() {
             wb: new Set(worldBooks.map(w => w.id)),
             regex: new Set(regexes.map(r => r.id)),
         };
-        const cleanSlot = (slot: BindingSlot): [BindingSlot, boolean] => {
+        const cleanSlot = (slot: BindingSlot, preserveApi = false): [BindingSlot, boolean] => {
             const s = { ...slot };
             let changed = false;
-            if (s.apiConfigId && !validSets.api.has(s.apiConfigId)) { s.apiConfigId = undefined; changed = true; }
+            if (!preserveApi && s.apiConfigId && !validSets.api.has(s.apiConfigId)) { s.apiConfigId = undefined; changed = true; }
             if (s.voiceConfigId && !validSets.voice.has(s.voiceConfigId)) { s.voiceConfigId = undefined; changed = true; }
             if (s.presetId && !validSets.preset.has(s.presetId)) { s.presetId = undefined; changed = true; }
             if (s.userIdentityId && !validSets.identity.has(s.userIdentityId)) { s.userIdentityId = undefined; changed = true; }
@@ -213,14 +214,19 @@ export function BindingManager() {
                 newAppDefaults[appId] = cleaned;
             }
             const newBindings = prev.characterBindings.map(b => {
+                const chatApi = resolveBinding(prev, b.characterId, "chat").apiConfigId;
                 const [defaults, dChanged] = cleanSlot(b.defaults);
                 if (dChanged) dirty = true;
                 const newOverrides: Record<string, BindingSlot> = {};
                 for (const [k, v] of Object.entries(b.appOverrides)) {
                     if (!v) continue;
-                    const [cleaned, oChanged] = cleanSlot(v);
+                    const [cleaned, oChanged] = cleanSlot(v, k === "chat");
                     if (oChanged) dirty = true;
                     newOverrides[k] = cleaned;
+                }
+                if (chatApi && !validSets.api.has(chatApi) && newOverrides.chat?.apiConfigId !== chatApi) {
+                    newOverrides.chat = { ...newOverrides.chat, apiConfigId: chatApi };
+                    dirty = true;
                 }
                 return { ...b, defaults, appOverrides: newOverrides };
             });

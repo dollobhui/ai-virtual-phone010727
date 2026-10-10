@@ -54,7 +54,7 @@ import { useKeyboardDismissAutoSend } from "@/components/chat/use-keyboard-dismi
 import { cancelBailoutKey } from "@/lib/push-bailout-client";
 import { PENDING_REPLY_PREFIX } from "@/lib/friend-request-engine";
 import type { UserIdentity } from "@/components/settings/user-identity";
-import { AlertCircle, Blocks, Check, Trash2, User, ChevronLeft, ChevronRight, Clapperboard, Clock, Gift, Languages, Loader2, MoreHorizontal, X } from "lucide-react";
+import { AlertCircle, Blocks, Check, Trash2, User, ChevronLeft, ChevronRight, Clapperboard, Clock, Gift, Languages, Loader2, MoreHorizontal, SlidersHorizontal, X } from "lucide-react";
 import { setDebugChatState } from "@/lib/debug-store";
 import { SessionCustomCSS } from "@/components/ui/session-custom-css";
 import { setChatActive } from "@/lib/music-action-queue";
@@ -726,7 +726,6 @@ const ChatTextInputBar = memo(forwardRef<ChatTextInputHandle, {
     );
     const suggestEnabled = !inputLocked && !panelOpen && !suggestClosed && inputText.trim().length > 0;
     const plusMenuItems = [
-        ...(modelSwitchAvailable ? [{ icon: <Blocks size={22} strokeWidth={1.5} />, label: "切换模型", onClick: onSwitchModel, disabled: modelSwitchDisabled }] : []),
         { icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--c-text)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></svg>, label: "照片墙", onClick: () => onOpenRichModal("photo") },
         { icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--c-text)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="7" y1="8" x2="17" y2="8" /><line x1="7" y1="12" x2="14" y2="12" /><line x1="7" y1="16" x2="11" y2="16" /></svg>, label: "文字图片", onClick: () => onOpenRichModal("text_photo") },
         { icon: <AlertCircle size={22} strokeWidth={1.5} color="var(--c-text)" />, label: "系统指令", onClick: () => onOpenRichModal("system_instruction") },
@@ -738,6 +737,7 @@ const ChatTextInputBar = memo(forwardRef<ChatTextInputHandle, {
         { icon: <Gift size={22} strokeWidth={1.5} color="var(--c-text)" />, label: "礼物", onClick: () => onOpenRichModal("gift") },
         { icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--c-text)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" /></svg>, label: "位置", onClick: () => onOpenRichModal("location") },
         { icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--c-text)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="22" /><line x1="8" y1="22" x2="16" y2="22" /></svg>, label: "语音条", onClick: () => onOpenRichModal("voice_msg") },
+        ...(modelSwitchAvailable ? [{ icon: <SlidersHorizontal size={22} strokeWidth={1.5} />, label: "切换模型", onClick: onSwitchModel, disabled: modelSwitchDisabled }] : []),
         ...customPlusActions.map(action => ({
             icon: action.appIconDataUrl
                 ? <span className="chat-plus-custom-app-icon" style={{ backgroundImage: `url(${action.appIconDataUrl})` }} aria-hidden="true" />
@@ -1349,8 +1349,8 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
     const isGeneratingRef = useRef(false);
     const ordinaryOnlineText = !session.isGroup && !offlineMode && !theaterMode && !showVoiceCall && !showVideoCall;
     const onlineTextMissing = useMemo(() => {
-        const selection = loadBindingConfig().characterBindings.find(binding => binding.characterId === session.contactId)?.onlineText;
-        return Boolean(selection && !loadApiConfigs().some(config => config.id === selection.apiConfigId));
+        const apiId = resolveBinding(loadBindingConfig(), session.contactId, "chat").apiConfigId;
+        return Boolean(apiId && !loadApiConfigs().some(config => config.id === apiId));
     }, [session.contactId, onlineTextRevision]);
     const modelSwitchDisabled = isGenerating || isOnlineTextBusy(session.contactId) || isBackgroundReplyGenerating(session.id);
     const canSwitchModel = () => ordinaryOnlineText && !isGeneratingRef.current && !isGenerating
@@ -1365,8 +1365,8 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
     };
     useEffect(() => {
         const refresh = () => {
-            const selection = loadBindingConfig().characterBindings.find(binding => binding.characterId === session.contactId)?.onlineText;
-            if (ordinaryOnlineText && selection && !loadApiConfigs().some(config => config.id === selection.apiConfigId)) {
+            const apiId = resolveBinding(loadBindingConfig(), session.contactId, "chat").apiConfigId;
+            if (ordinaryOnlineText && apiId && !loadApiConfigs().some(config => config.id === apiId)) {
                 activeGenerationRuns.get(session.id)?.controller.abort();
                 cancelBackgroundGeneration(session.id);
             }

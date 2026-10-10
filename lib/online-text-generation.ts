@@ -1,4 +1,4 @@
-// Ordinary one-to-one text replies share this guard, including background replies.
+// All one-to-one chat text generation shares the role API guard, including calls and offline.
 // No configuration values or chat messages are stored here.
 export const ONLINE_TEXT_STATE_UPDATED = "online-text-state-updated";
 export const ONLINE_TEXT_API_MISSING_MESSAGE = "当前 API 配置已删除，请重新选择后继续";
@@ -25,13 +25,6 @@ function notify(characterId: string): void {
     if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent(ONLINE_TEXT_STATE_UPDATED, { detail: { characterId } }));
     }
-}
-
-export function isOrdinaryOnlineTextRequest(isGroup: boolean | undefined, options?: { appId?: string; appTags?: string[] }): boolean {
-    const tags = options?.appTags ?? [];
-    return !isGroup && (options?.appId ?? "chat") === "chat"
-        && tags.includes("chat") && tags.includes("text")
-        && !tags.some(tag => ["offline", "voice", "video", "group_chat"].includes(tag));
 }
 
 export function isOnlineTextBusy(characterId: string): boolean {

@@ -27,7 +27,6 @@ import type { ApiConfig, PresetConfig, Prompt, PromptOrderEntry, RegexConfig } f
 import type { CustomAppPromptProfile } from "./custom-app-types";
 import {
     resolveBinding,
-    resolveOnlineTextBinding,
     loadBindingConfig,
     loadApiConfigs,
     loadPresets,
@@ -90,7 +89,7 @@ import {
 } from "./bilingual-prompt-defaults";
 import { parseOfflineResponse, extractThinkingTag, type ParsedOfflineResponse } from "./chat-offline-storage";
 import { throwIfAborted } from "./abort-utils";
-import { beginOnlineTextGeneration, isOrdinaryOnlineTextRequest, OnlineTextApiUnavailableError } from "./online-text-generation";
+import { beginOnlineTextGeneration, OnlineTextApiUnavailableError } from "./online-text-generation";
 import { armShortcutContinuation, SHORTCUT_VISION_OFF_NOTE, type ShortcutContinuationHandle, type ShortcutContinuationStyle } from "./shortcut-continuation-client";
 
 
@@ -1784,21 +1783,16 @@ export async function buildChatPromptMessages(
 
     const resolvedAppId = options?.appId ?? "chat";
     const bindings = loadBindingConfig();
-    const onlineText = isOrdinaryOnlineTextRequest(session.isGroup, options);
-    const activeSlot = onlineText ? resolveOnlineTextBinding(bindings, character.id)
-        : resolveBinding(bindings, character.id, resolvedAppId);
+    const activeSlot = resolveBinding(bindings, character.id, resolvedAppId);
 
     if (!activeSlot.apiConfigId) {
-        if (onlineText && bindings.characterBindings.find(binding => binding.characterId === character.id)?.onlineText) {
-            throw new OnlineTextApiUnavailableError();
-        }
         throw new ChatEngineError(`No API Configuration bound for ${character.name}. Please go to Settings -> Chat to assign one.`);
     }
 
     const apiConfigs = loadApiConfigs();
     const config = apiConfigs.find(c => c.id === activeSlot.apiConfigId);
     if (!config) {
-        if (onlineText && bindings.characterBindings.find(binding => binding.characterId === character.id)?.onlineText) {
+        if (!session.isGroup && resolvedAppId === "chat") {
             throw new OnlineTextApiUnavailableError();
         }
         throw new ChatEngineError(`API Configuration not found for ${character.name}.`);
@@ -2012,6 +2006,26 @@ export type OfflineChatCompletionResult = ParsedOfflineResponse & {
 };
 
 export async function generateOfflineChatCompletion(
+    session: ChatSession,
+    history: ChatMessage[],
+    options?: { signal?: AbortSignal; onStreamDelta?: (delta: string) => void },
+): Promise<OfflineChatCompletionResult> {
+    const run = !session.isGroup ? beginOnlineTextGeneration(session.contactId,
+        resolveBinding(loadBindingConfig(), session.contactId, "chat").apiConfigId, options?.signal) : null;
+    const runOptions = run ? { ...options, signal: run.signal } : options;
+    try {
+        const result = await generateOfflineChatCompletionCore(session, history, runOptions);
+        throwIfAborted(runOptions?.signal);
+        return result;
+    } catch (error) {
+        if (run?.signal.reason instanceof OnlineTextApiUnavailableError) throw run.signal.reason;
+        throw error;
+    } finally {
+        run?.finish();
+    }
+}
+
+async function generateOfflineChatCompletionCore(
     session: ChatSession,
     history: ChatMessage[],
     options?: { signal?: AbortSignal; onStreamDelta?: (delta: string) => void },
@@ -2495,9 +2509,9 @@ export async function generateChatCompletion(
     options?: ChatPromptBuildOptions & { signal?: AbortSignal },
     callbacks?: ChatCompletionCallbacks,
 ): Promise<ChatCompletionResult> {
-    const onlineRun = isOrdinaryOnlineTextRequest(session.isGroup, options)
+    const onlineRun = !session.isGroup && (options?.appId ?? "chat") === "chat"
         ? beginOnlineTextGeneration(session.contactId,
-            resolveOnlineTextBinding(loadBindingConfig(), session.contactId).apiConfigId, options?.signal)
+            resolveBinding(loadBindingConfig(), session.contactId, "chat").apiConfigId, options?.signal)
         : null;
     const runOptions = onlineRun ? { ...options, signal: onlineRun.signal } : options;
     // 发送兜底（离线推送）：生成期间在服务端挂一张带心跳租约的保险单，

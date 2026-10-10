@@ -14,15 +14,18 @@ import {
 } from "@/lib/floating-dock-store";
 import {
     getCharacterBinding,
+    getCharacterChatApiSelection,
     loadApiConfigs,
     loadBindingConfig,
     loadWorldBooks,
     saveBindingConfig,
+    saveCharacterApiConfig,
     setCharacterBinding,
 } from "@/lib/settings-storage";
 import type { ApiConfig, BindingConfig, BindingSlot, WorldBookConfig } from "@/lib/settings-types";
 import { loadCharacters } from "@/lib/character-storage";
 import type { Character } from "@/lib/character-types";
+import { ONLINE_TEXT_STATE_UPDATED, isOnlineTextBusy } from "@/lib/online-text-generation";
 
 type QuickScope = "global" | "character";
 type FloatingPosition = { left: number; top: number };
@@ -64,6 +67,8 @@ export function QuickActionFloat() {
     const [apiConfigs, setApiConfigs] = useState<ApiConfig[]>([]);
     const [worldBooks, setWorldBooks] = useState<WorldBookConfig[]>([]);
     const [characters, setCharacters] = useState<Character[]>([]);
+    const [apiSaving, setApiSaving] = useState(false);
+    const [apiError, setApiError] = useState("");
     const [floatingPosition, setFloatingPosition] = useState<FloatingPosition | null>(null);
     const [popoverPosition, setPopoverPosition] = useState<PopoverPosition | null>(null);
     const [draggingFloatingButton, setDraggingFloatingButton] = useState(false);
@@ -117,9 +122,13 @@ export function QuickActionFloat() {
         const handleBindingsUpdated = () => reloadData();
         const handleFocus = () => reloadData();
         window.addEventListener("settings-bindings-updated", handleBindingsUpdated);
+        window.addEventListener("settings-api-configs-updated", handleBindingsUpdated);
+        window.addEventListener(ONLINE_TEXT_STATE_UPDATED, handleBindingsUpdated);
         window.addEventListener("focus", handleFocus);
         return () => {
             window.removeEventListener("settings-bindings-updated", handleBindingsUpdated);
+            window.removeEventListener("settings-api-configs-updated", handleBindingsUpdated);
+            window.removeEventListener(ONLINE_TEXT_STATE_UPDATED, handleBindingsUpdated);
             window.removeEventListener("focus", handleFocus);
         };
     }, [enabled, reloadData]);
@@ -207,7 +216,12 @@ export function QuickActionFloat() {
     );
     const selectedWorldBookIds = currentSlot.worldBookIds || [];
     const selectedWorldBookNames = selectedWorldBookIds.map(id => itemName(worldBooks, id)).filter(Boolean);
-    const inheritedApiName = scope === "character" ? itemName(apiConfigs, config.globalDefaults.apiConfigId) : "";
+    const inheritedApiName = scope === "character" ? itemName(apiConfigs, config.appDefaults?.chat?.apiConfigId || config.globalDefaults.apiConfigId) : "";
+    const apiSelection = scope === "character" && selectedCharId
+        ? getCharacterChatApiSelection(config, selectedCharId)
+        : { apiConfigId: config.globalDefaults.apiConfigId, inherits: !config.globalDefaults.apiConfigId };
+    const apiBlocked = apiSaving || (scope === "character" ? isOnlineTextBusy(selectedCharId)
+        : characters.some(character => isOnlineTextBusy(character.id)));
     const inheritedWorldBookNames = scope === "character"
         ? (config.globalDefaults.worldBookIds || []).map(id => itemName(worldBooks, id)).filter(Boolean)
         : [];
@@ -217,18 +231,20 @@ export function QuickActionFloat() {
         saveBindingConfig(next);
     }, []);
 
-    const updateApiConfig = useCallback((apiConfigId: string | undefined) => {
+    const updateApiConfig = async (apiConfigId: string | undefined) => {
+        if (apiBlocked) return;
+        setApiError("");
         if (scope === "global") {
-            persistConfig({ ...config, globalDefaults: { ...config.globalDefaults, apiConfigId: apiConfigId || undefined } });
+            const latest = loadBindingConfig();
+            persistConfig({ ...latest, globalDefaults: { ...latest.globalDefaults, apiConfigId: apiConfigId || undefined } });
             return;
         }
         if (!selectedCharId) return;
-        const binding = getCharacterBinding(config, selectedCharId);
-        persistConfig(setCharacterBinding(config, {
-            ...binding,
-            defaults: { ...binding.defaults, apiConfigId: apiConfigId || undefined },
-        }));
-    }, [config, persistConfig, scope, selectedCharId]);
+        setApiSaving(true);
+        try { await saveCharacterApiConfig(selectedCharId, apiConfigId); reloadData(); }
+        catch (error) { setApiError(error instanceof Error ? error.message : "保存失败，请重试"); }
+        finally { setApiSaving(false); }
+    };
 
     const updateWorldBooks = useCallback((worldBookIds: string[]) => {
         const nextIds = worldBookIds.length > 0 ? worldBookIds : undefined;
@@ -515,18 +531,18 @@ export function QuickActionFloat() {
                         <section className="quick-action-section" data-disabled={characterDisabled ? "" : undefined}>
                             <div className="quick-action-section-heading">
                                 <span><Code2 size={16} />API</span>
-                                {currentSlot.apiConfigId ? <small>{itemName(apiConfigs, currentSlot.apiConfigId)}</small> : <small>{scope === "global" ? "未设置" : "继承"}</small>}
+                                {apiSelection.apiConfigId ? <small>{itemName(apiConfigs, apiSelection.apiConfigId)}</small> : <small>{scope === "global" ? "未设置" : "继承"}</small>}
                             </div>
                             <div className="quick-action-option-list">
                                 <button
                                     type="button"
                                     className="quick-action-option"
-                                    data-selected={!currentSlot.apiConfigId}
-                                    disabled={characterDisabled}
-                                    onClick={() => updateApiConfig(undefined)}
+                                    data-selected={apiSelection.inherits}
+                                    disabled={characterDisabled || apiBlocked}
+                                    onClick={() => void updateApiConfig(undefined)}
                                 >
                                     <span>{inheritApiLabel}</span>
-                                    {!currentSlot.apiConfigId ? <Check size={15} /> : null}
+                                    {apiSelection.inherits ? <Check size={15} /> : null}
                                 </button>
                                 {apiConfigs.length === 0 ? (
                                     <div className="quick-action-empty">暂无 API 配置</div>
@@ -535,15 +551,16 @@ export function QuickActionFloat() {
                                         type="button"
                                         key={api.id}
                                         className="quick-action-option"
-                                        data-selected={currentSlot.apiConfigId === api.id}
-                                        disabled={characterDisabled}
-                                        onClick={() => updateApiConfig(api.id)}
+                                        data-selected={apiSelection.apiConfigId === api.id}
+                                        disabled={characterDisabled || apiBlocked}
+                                        onClick={() => void updateApiConfig(api.id)}
                                     >
                                         <span>{api.name || api.defaultModel || api.provider}</span>
-                                        {currentSlot.apiConfigId === api.id ? <Check size={15} /> : null}
+                                        {apiSelection.apiConfigId === api.id ? <Check size={15} /> : null}
                                     </button>
                                 ))}
                             </div>
+                            {apiError && <p role="alert" className="quick-action-empty">{apiError}</p>}
                         </section>
 
                         <section className="quick-action-section" data-disabled={characterDisabled ? "" : undefined}>
@@ -552,7 +569,7 @@ export function QuickActionFloat() {
                                 <button
                                     type="button"
                                     className="quick-action-clear-btn"
-                                    disabled={characterDisabled || selectedWorldBookIds.length === 0}
+                                    disabled={characterDisabled || apiSaving || selectedWorldBookIds.length === 0}
                                     onClick={() => updateWorldBooks([])}
                                 >
                                     清空
@@ -562,7 +579,7 @@ export function QuickActionFloat() {
                                 type="button"
                                 className="quick-action-option quick-action-inherit-option"
                                 data-selected={selectedWorldBookIds.length === 0}
-                                disabled={characterDisabled}
+                                disabled={characterDisabled || apiSaving}
                                 onClick={() => updateWorldBooks([])}
                             >
                                 <span>{selectedWorldBookIds.length === 0 ? inheritWorldBookLabel : selectedWorldBookNames.join("、")}</span>
@@ -580,7 +597,7 @@ export function QuickActionFloat() {
                                                 key={book.id}
                                                 className="quick-action-chip"
                                                 data-selected={selected}
-                                                disabled={characterDisabled}
+                                                disabled={characterDisabled || apiSaving}
                                                 onClick={() => toggleWorldBook(book.id)}
                                             >
                                                 <span>{book.name}</span>
