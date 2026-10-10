@@ -1,4 +1,5 @@
-const { chromium } = require('playwright');
+const { chromium, webkit } = require('playwright');
+const testFolderGridMotion = require('./test-folder-grid-motion.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -213,6 +214,12 @@ const baseUrl = 'http://127.0.0.1:' + (process.env.FOLDER_TEST_PORT || '3017');
         });
         assert.deepEqual(errors,[]);
         console.log('PASS no browser runtime errors');
+        await testFolderGridMotion(browser,baseUrl,'chromium',process.env.FOLDER_TEST_SCREENSHOT_DIR);
+        if (process.env.FOLDER_TEST_WEBKIT === '1') {
+            const safari = await webkit.launch({headless:true});
+            try { await testFolderGridMotion(safari,baseUrl,'webkit',process.env.FOLDER_TEST_SCREENSHOT_DIR); }
+            finally { await safari.close(); }
+        }
     } finally { await browser.close(); }
     } finally {
         server.kill();

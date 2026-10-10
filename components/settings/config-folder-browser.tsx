@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode, type PointerEvent } from "react";
-import { Folder, Plus, MoreHorizontal, ChevronLeft, ChevronRight, GripVertical, Search } from "lucide-react";
+import { Folder, Plus, MoreHorizontal, ChevronLeft, ChevronRight, GripVertical } from "lucide-react";
 import { BottomSheet, ConfirmDialog, ContentDialog } from "@/components/ui/modal";
-import { configFolderFor, moveFolderInOrder, UNCLASSIFIED_FOLDER_ID, type ConfigFolder } from "@/lib/config-folder-types";
+import { configFolderFor, UNCLASSIFIED_FOLDER_ID, type ConfigFolder } from "@/lib/config-folder-types";
+import { useFolderGridSort } from "@/lib/use-folder-grid-sort";
 import type { ConfigFolderController } from "@/lib/use-config-folders";
 
 const UNCLASSIFIED: ConfigFolder = { id: UNCLASSIFIED_FOLDER_ID, name: "未分类" };
@@ -29,10 +30,10 @@ export function ConfigFolderPicker({ controller, title, onSelect, onCancel }: {
     </ContentDialog>;
 }
 
-function FolderCard({ folder, count, sorting, dragging, onOpen, onMenu, onDrag, onDrop, onKeyboardMove }: {
+function FolderCard({ folder, count, sorting, dragging, onOpen, onMenu, onDragStart, onKeyboardMove }: {
     folder: ConfigFolder; count: number; sorting: boolean; dragging: boolean;
-    onOpen: () => void; onMenu: () => void; onDrag: (x: number, y: number) => void;
-    onDrop: () => void; onKeyboardMove: (offset: number) => void;
+    onOpen: () => void; onMenu: () => void; onDragStart: (event: PointerEvent<HTMLDivElement>) => void;
+    onKeyboardMove: (offset: number) => void;
 }) {
     const press = useRef<{ x: number; y: number; timer?: ReturnType<typeof setTimeout>; long: boolean } | null>(null);
     const suppressClick = useRef(false);
@@ -51,8 +52,7 @@ function FolderCard({ folder, count, sorting, dragging, onOpen, onMenu, onDrag, 
         suppressClick.current = false;
         press.current = { x: event.clientX, y: event.clientY, long: false };
         if (sorting) {
-            event.currentTarget.setPointerCapture(event.pointerId);
-            onDrag(event.clientX, event.clientY);
+            onDragStart(event);
         } else {
             const pointerId = event.pointerId;
             press.current.timer = setTimeout(() => {
@@ -80,37 +80,37 @@ function FolderCard({ folder, count, sorting, dragging, onOpen, onMenu, onDrag, 
         }
     };
     return <div data-folder-id={folder.id} className="ui-config-card min-w-0 cursor-pointer relative"
-        style={{ aspectRatio: "3 / 2", padding: "16px", justifyContent: "space-between", touchAction: sorting ? "none" : "pan-y", opacity: dragging ? 0.55 : 1 }}
+        style={{ aspectRatio: "3 / 2", padding: "16px", justifyContent: "space-between", touchAction: sorting ? "none" : "pan-y", opacity: dragging ? 0 : 1, userSelect: sorting ? "none" : undefined, WebkitUserSelect: sorting ? "none" : undefined, WebkitTouchCallout: "none" }}
         role="button" tabIndex={0} aria-label={`${folder.name}，${count} 个配置${sorting ? "，用方向键排序" : ""}`}
         onClick={() => { if (!sorting && !suppressClick.current) onOpen(); suppressClick.current = false; }}
         onContextMenu={event => { event.preventDefault(); if (!sorting) onMenu(); }}
         onPointerDown={pointerDown}
         onPointerMove={event => {
             if (!press.current) return;
-            if (sorting) onDrag(event.clientX, event.clientY);
-            else if (Math.hypot(event.clientX - press.current.x, event.clientY - press.current.y) > 8) {
+            if (!sorting && Math.hypot(event.clientX - press.current.x, event.clientY - press.current.y) > 8) {
                 suppressClick.current = true;
                 clearPress();
             }
         }}
-        onPointerUp={() => { if (sorting && press.current) onDrop(); clearPress(); }}
-        onPointerCancel={() => { if (sorting) onDrop(); clearPress(); }}
+        onPointerUp={clearPress}
+        onPointerCancel={clearPress}
         onKeyDown={event => {
             if (event.target !== event.currentTarget) return;
             const offsets: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -2, ArrowDown: 2 };
             if (sorting && offsets[event.key]) { event.preventDefault(); onKeyboardMove(offsets[event.key]); }
             else if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (!sorting) onOpen(); }
-            else if (event.key === "F10" && event.shiftKey) { event.preventDefault(); onMenu(); }
+            else if (!sorting && event.key === "F10" && event.shiftKey) { event.preventDefault(); onMenu(); }
         }}>
         <div className="min-w-0 flex flex-col gap-1.5 pr-5">
             <div className="flex items-center gap-1.5 min-w-0"><Folder size={16} className="shrink-0" />
                 <span className="truncate text-[calc(14.4px*var(--app-text-scale,1))] font-bold text-[var(--c-text-title)]">{folder.name}</span></div>
             <span className="menu-desc">{count} 个配置</span>
         </div>
-        {!sorting && <button type="button" aria-label={`管理文件夹 ${folder.name}`} className="ui-link-btn absolute top-3 right-2"
+        {!sorting && <button type="button" aria-label={`管理文件夹 ${folder.name}`} className="ui-link-btn absolute"
+            style={{ top: 0, right: 2, width: 44, height: 44, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }}
             onClick={event => { event.stopPropagation(); onMenu(); }}><MoreHorizontal size={18} /></button>}
         <div className="flex items-center justify-between gap-2"><span className="menu-desc ts-12">配置 {count}</span>
-            {sorting ? <GripVertical size={16} className="opacity-40" /> : <ChevronRight size={16} className="opacity-40" />}</div>
+            {sorting ? <GripVertical size={16} className="opacity-40" /> : <ChevronRight data-folder-arrow size={16} className="opacity-40 shrink-0" />}</div>
     </div>;
 }
 
@@ -127,9 +127,7 @@ export function ConfigFolderBrowser<T extends { id: string }>({ controller, item
     const [nameDialog, setNameDialog] = useState<{ id?: string; name: string } | null>(null);
     const [deleteId, setDeleteId] = useState<string | null>(null);
     const [draftOrder, setDraftOrder] = useState<string[] | null>(null);
-    const [dragId, setDragId] = useState<string | null>(null);
-    const dragRef = useRef<string | null>(null);
-    const gridRef = useRef<HTMLDivElement>(null);
+    const { gridRef, dragId, start, gridEvents, keyboardMove } = useFolderGridSort(draftOrder, setDraftOrder);
     const normalizedQuery = query.trim().toLocaleLowerCase();
     const folders = useMemo(() => new Map([UNCLASSIFIED, ...metadata.folders].map(folder => [folder.id, folder])), [metadata.folders]);
     const counts = useMemo(() => {
@@ -154,43 +152,20 @@ export function ConfigFolderBrowser<T extends { id: string }>({ controller, item
         if (next.has(id)) next.delete(id); else next.add(id);
         return next;
     });
-    const dragTo = (id: string, x: number, y: number) => {
-        dragRef.current = id;
-        setDragId(id);
-        // Hit-test both coordinates against current grid rectangles. Never reuse
-        // the single-column touch sorter (a Y-only index is wrong for two columns).
-        const nodes = gridRef.current?.querySelectorAll<HTMLElement>("[data-folder-id]");
-        if (!nodes) return;
-        let nearest: string | null = null;
-        let distance = Infinity;
-        for (const node of nodes) {
-            const rect = node.getBoundingClientRect();
-            const delta = Math.hypot(x - (rect.left + rect.width / 2), y - (rect.top + rect.height / 2));
-            if (delta < distance) { nearest = node.dataset.folderId ?? null; distance = delta; }
-        }
-        if (nearest && nearest !== id) setDraftOrder(previous => previous
-            ? moveFolderInOrder(previous, previous.indexOf(id), previous.indexOf(nearest!)) : previous);
-        const scroller = gridRef.current?.closest(".page-body");
-        if (scroller) {
-            const rect = scroller.getBoundingClientRect();
-            if (y < rect.top + 48) scroller.scrollTop -= 12;
-            else if (y > rect.bottom - 48) scroller.scrollTop += 12;
-        }
-    };
     if (!active) return error ? <p role="alert" className="menu-desc">{error}</p> : null;
     return <div className="flex flex-col gap-3">
         {error && <div role="alert" className="ui-config-card"><p className="menu-desc">{error}</p><button className="ui-btn ui-btn-outline" onClick={() => void controller.reload()}>重新读取</button></div>}
         {!ready ? <p className="menu-desc">{error ? "分类操作暂不可用" : "正在读取文件夹…"}</p> : <>
             {draftOrder ? <div className="flex flex-wrap items-center gap-2">
                 <span className="menu-desc flex-1" aria-live="polite">拖动文件夹排序，也可使用方向键</span>
-                <button className="ui-btn ui-btn-outline" disabled={busy} onClick={() => { setDraftOrder(null); setDragId(null); dragRef.current = null; }}>取消</button>
+                <button className="ui-btn ui-btn-outline" disabled={busy} onClick={() => { setDraftOrder(null); }}>取消</button>
                 <button className="ui-btn ui-btn-primary" disabled={busy || dragId !== null} onClick={async () => {
                     if (await run({ type: "reorder", order: draftOrder })) setDraftOrder(null);
                 }}>保存排序</button>
             </div> : <>
                 <div className="flex gap-2 items-center">
-                    <div className="relative flex-1 min-w-0"><Search size={16} className="absolute left-3 top-3 opacity-40" />
-                        <input aria-label="搜索当前类别的全部配置" className="ui-input pl-9" value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索全部文件夹中的配置" /></div>
+                    <div className="flex-1 min-w-0">
+                        <input aria-label="搜索当前类别的全部配置" className="ui-input" value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索全部文件夹中的配置" /></div>
                     <button aria-label="新建文件夹" className="ui-btn ui-btn-outline shrink-0" disabled={busy} onClick={() => setNameDialog({ name: "" })}><Plus size={15} />文件夹</button>
                 </div>
                 {showList && <div className="flex flex-wrap items-center gap-2">
@@ -204,13 +179,12 @@ export function ConfigFolderBrowser<T extends { id: string }>({ controller, item
                     <button className="ui-btn ui-btn-primary" disabled={busy || !selected.size} onClick={() => setMoveOpen(true)}>移动到</button>
                 </div>}
             </>}
-            {!showList || draftOrder ? <div ref={gridRef} className="grid grid-cols-2 gap-3">
+            {!showList || draftOrder ? <div ref={gridRef} {...gridEvents} className="grid grid-cols-2 gap-3">
                 {(draftOrder ?? metadata.order).map(id => {
                     const folder = folders.get(id);
-                    return folder ? <FolderCard key={id} folder={folder} count={counts.get(id) ?? 0} sorting={draftOrder !== null} dragging={dragId === id}
-                        onOpen={() => setCurrentFolderId(id)} onMenu={() => setMenuId(id)} onDrag={(x, y) => dragTo(id, x, y)}
-                        onDrop={() => { setDragId(null); dragRef.current = null; }} onKeyboardMove={offset => setDraftOrder(previous => previous
-                            ? moveFolderInOrder(previous, previous.indexOf(id), previous.indexOf(id) + offset) : previous)} /> : null;
+                    return folder ? <div key={id} data-folder-slot={id} className="min-w-0"><FolderCard folder={folder} count={counts.get(id) ?? 0} sorting={draftOrder !== null} dragging={dragId === id}
+                        onOpen={() => setCurrentFolderId(id)} onMenu={() => setMenuId(id)} onDragStart={event => start(id, event)}
+                        onKeyboardMove={offset => keyboardMove(id, offset)} /></div> : null;
                 })}
             </div> : visible.length ? <div className={columns === 2 ? "grid grid-cols-2 gap-3" : "flex flex-col gap-3"}>
                 {visible.map(item => <div key={item.id} className="relative min-w-0" onClickCapture={event => {
