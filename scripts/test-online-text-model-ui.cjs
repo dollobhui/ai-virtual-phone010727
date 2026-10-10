@@ -61,7 +61,7 @@ const baseUrl = 'http://127.0.0.1:' + port;
             const item = page.getByRole('button', { name: '切换模型', exact: true });
             const icon = item.locator('svg');
             assert.equal(await icon.getAttribute('width'), '22'); assert.equal(await icon.getAttribute('stroke-width'), '1.5');
-            assert.equal(await icon.getAttribute('stroke'), 'currentColor');
+            assert.equal(await icon.getAttribute('stroke'), 'var(--c-text)');
             assert.ok((await icon.getAttribute('class')).includes('lucide-sliders-horizontal'));
             const threeColumns = await page.addStyleTag({ content: '.chat-plus-menu { grid-template-columns:repeat(3,1fr) !important; }' });
             const positions = await page.locator('.chat-plus-menu-item').evaluateAll(elements => elements.map(element => {
@@ -76,6 +76,46 @@ const baseUrl = 'http://127.0.0.1:' + port;
             assert.equal(await dialog.getByRole('button', { name: '原配置', exact: true }).getAttribute('aria-pressed'), 'true');
             assert.equal(await dialog.getByRole('button', { name: '工作配置', exact: true }).getAttribute('aria-pressed'), 'false');
             await page.getByRole('button', { name: '关闭切换模型' }).click();
+        });
+        await check('model icon matches native icons in light/dark themes and custom SVG overrides', async () => {
+            await page.getByRole('button', { name: '更多功能', exact: true }).click();
+            const menu = page.locator('.chat-plus-menu');
+            const measure = () => menu.locator('.chat-plus-menu-item').evaluateAll(items => items.slice(0, 12).map(item => {
+                const icon = item.querySelector('svg'), box = item.querySelector('.chat-plus-icon-box');
+                const css = getComputedStyle(icon), boxCss = getComputedStyle(box);
+                const r = icon.getBoundingClientRect(), b = box.getBoundingClientRect();
+                return { stroke:css.stroke, width:css.width, height:css.height, strokeWidth:css.strokeWidth,
+                    linecap:css.strokeLinecap, linejoin:css.strokeLinejoin, fill:css.fill,
+                    boxWidth:boxCss.width, boxHeight:boxCss.height,
+                    offsetX:Math.round(Math.abs(r.x + r.width / 2 - b.x - b.width / 2) * 100) / 100,
+                    offsetY:Math.round(Math.abs(r.y + r.height / 2 - b.y - b.height / 2) * 100) / 100 };
+            }));
+            const compare = async expectedStroke => {
+                const metrics = await measure();
+                assert.equal(metrics.length, 12);
+                for (const index of [0, 2, 8, 10]) assert.deepEqual(metrics[11], metrics[index]);
+                assert.equal(metrics[11].stroke, expectedStroke);
+                assert.equal(metrics[11].width, '22px'); assert.equal(metrics[11].height, '22px');
+                assert.equal(parseFloat(metrics[11].strokeWidth), 1.5);
+                assert.equal(metrics[11].boxWidth, '44px'); assert.equal(metrics[11].boxHeight, '44px');
+                assert.ok(metrics[11].offsetX < 1 && metrics[11].offsetY < 1);
+            };
+            for (const [theme, text, panel] of [['light', '#161616', '#f6f6f8'], ['dark', '#ffffff', '#292929']]) {
+                // Deliberately retain a different parent color: the old currentColor icon failed here.
+                const themeStyle = await page.addStyleTag({ content: `.chat-app { --c-text:${text}; --c-panel:${panel}; } .chat-plus-menu { color:#2c3440; grid-template-columns:repeat(3,1fr); background:var(--c-panel); }` });
+                await compare(theme === 'light' ? 'rgb(22, 22, 22)' : 'rgb(255, 255, 255)');
+                if (process.env.MODEL_ICON_SCREENSHOT_DIR) {
+                    fs.mkdirSync(process.env.MODEL_ICON_SCREENSHOT_DIR, { recursive:true });
+                    await menu.screenshot({ path:path.join(process.env.MODEL_ICON_SCREENSHOT_DIR, `model-icon-${theme}.png`), animations:'disabled' });
+                }
+                await themeStyle.evaluate(element => element.remove());
+            }
+            const customStyle = await page.addStyleTag({ content: '.chat-plus-icon-box svg[stroke="var(--c-text)"] { stroke:#a855f7; stroke-width:2.25; }' });
+            const custom = await measure();
+            for (const index of [0, 2, 8, 10]) assert.deepEqual(custom[11], custom[index]);
+            assert.equal(custom[11].stroke, 'rgb(168, 85, 247)'); assert.equal(parseFloat(custom[11].strokeWidth), 2.25);
+            await customStyle.evaluate(element => element.remove());
+            await page.getByRole('button', { name: '更多功能', exact: true }).click();
         });
         await check('flat complete API list, no model/key/folder fields, switch preserves history and all non-API bindings', async () => {
             await open();
