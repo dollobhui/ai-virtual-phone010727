@@ -1,5 +1,8 @@
 "use client";
 
+import { ConfigFolderBrowser } from "./config-folder-browser";
+import { useConfigFolders } from "@/lib/use-config-folders";
+
 import { useState, useEffect, useCallback, useContext } from "react";
 import { Plus, RefreshCw, Rss, AlertCircle, FileEdit, Trash2, X, Check } from "lucide-react";
 import { SettingsContext } from "../phone-settings-app";
@@ -32,7 +35,15 @@ function getNativeToolProtocolLabel(config: ApiConfig): string {
 }
 
 export function ApiSettings() {
-    const { setSubpageRightAction } = useContext(SettingsContext);
+    const { setSubpageRightAction, setOverrideBack, setSubpageTitle } = useContext(SettingsContext);
+    const folders = useConfigFolders("api");
+    useEffect(() => {
+        if (folders.currentFolderId !== null) {
+            setOverrideBack(() => () => folders.setCurrentFolderId(null));
+            setSubpageTitle(folders.metadata.folders.find(folder => folder.id === folders.currentFolderId)?.name ?? "未分类");
+        } else { setOverrideBack(null); setSubpageTitle(null); }
+        return () => { setOverrideBack(null); setSubpageTitle(null); };
+    }, [folders.currentFolderId, folders.metadata.folders, folders.setCurrentFolderId, setOverrideBack, setSubpageTitle]);
     const [configs, setConfigs] = useState<ApiConfig[]>([]);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [isNewConfig, setIsNewConfig] = useState(false);
@@ -63,6 +74,7 @@ export function ApiSettings() {
     }, []);
 
     const addConfig = useCallback(() => {
+        if (!folders.ready || folders.busy) return;
         const newConfig: ApiConfig = {
             id: `config-${Date.now()}`,
             name: "新配置",
@@ -75,14 +87,16 @@ export function ApiSettings() {
             preventEmptyGenerateRambling: true,
         };
         persist([...configs, newConfig]);
+        void folders.assign(newConfig.id, folders.currentFolderId);
         setIsNewConfig(true);
         setEditingId(newConfig.id);
-    }, [configs, persist]);
+    }, [configs, persist, folders.assign, folders.currentFolderId, folders.ready, folders.busy]);
 
     useEffect(() => {
         setSubpageRightAction("api",
             <button
                 onClick={addConfig}
+                disabled={!folders.ready || folders.busy}
                 className="inline-flex h-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-[20px] bg-black px-4 text-xs font-bold text-white shadow-sm transition-all hover:bg-gray-800 hover:shadow-md active:scale-95 focus:outline-none"
             >
                 <Plus size={15} strokeWidth={1.8} />
@@ -96,7 +110,8 @@ export function ApiSettings() {
         persist(configs.map(c => c.id === id ? { ...c, ...updates } : c));
     };
 
-    const removeConfig = (id: string) => {
+    const removeConfig = async (id: string) => {
+        if (!await folders.removeAssociation(id)) return false;
         persist(configs.filter(c => c.id !== id));
         removeApiConfigReferences(id);
         const newFetchedModels = { ...fetchedModels };
@@ -106,6 +121,7 @@ export function ApiSettings() {
         const newTestResults = { ...testResult };
         delete newTestResults[id];
         setTestResult(newTestResults);
+        return true;
     };
 
     // Use unified determineBaseUrl from api-helpers
@@ -217,80 +233,66 @@ export function ApiSettings() {
                 <h2 className="m-0 mx-2 ts-28 font-bold italic leading-none text-black">API Settings</h2>
             </div>
 
-            {configs.length === 0 ? (
-                <div className="ui-empty">
-                    <div className="ui-icon-circle">
-                        <AlertCircle size={24} />
-                    </div>
-                    <span className="menu-label font-semibold">没有 API 配置</span>
-                    <span className="menu-desc max-w-[240px]">
-                        配置 API 密钥和模型以连接到 AI 服务。
-                    </span>
-                    <button onClick={addConfig} className="ui-btn ui-btn-primary rounded-[20px] mt-2">
-                        <Plus size={16} /> 添加配置
-                    </button>
-                </div>
-            ) : (
-                <div className="grid grid-cols-2 gap-3">
-                    {configs.map(config => (
-                        <div
-                            key={config.id}
-                            className="ui-config-card min-w-0 cursor-pointer"
-                            style={{ aspectRatio: "3 / 2", padding: "12px", justifyContent: "space-between" }}
-                            role="button"
-                            tabIndex={0}
-                            aria-label={`编辑 ${config.name || config.provider}`}
-                            onClick={() => setEditingId(config.id)}
-                            onKeyDown={(event) => {
-                                if (event.target !== event.currentTarget) return;
-                                if (event.key === "Enter" || event.key === " ") {
-                                    event.preventDefault();
-                                    setEditingId(config.id);
-                                }
-                            }}
-                        >
-                            <div className="min-w-0 flex flex-col gap-1">
-                                <span className="truncate text-[calc(14.4px*var(--app-text-scale,1))] font-bold leading-tight text-[var(--c-text-title)]">{config.name || config.provider}</span>
-                                <span className="menu-desc truncate">{config.defaultModel || config.provider || "未设置模型"}</span>
-                            </div>
-                            <div className="flex gap-2 shrink-0 items-center justify-end">
-                                <button
-                                    type="button"
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        setEditingId(config.id);
-                                    }}
-                                    className="ui-link-btn"
-                                >
-                                    <FileEdit size={18} />
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        setConfirmDeleteId(config.id);
-                                    }}
-                                    className="ui-link-btn"
-                                    data-variant="danger"
-                                >
-                                    <Trash2 size={18} />
-                                </button>
-                            </div>
+            <ConfigFolderBrowser controller={folders} items={configs} searchText={config => [config.name, config.provider, config.defaultModel, config.baseUrl].filter(Boolean).join(" ")} columns={2} active={!editingId}>
+                {(config) => (
+                    <div
+                        key={config.id}
+                        className="ui-config-card min-w-0 cursor-pointer"
+                        style={{ aspectRatio: "3 / 2", padding: "12px", justifyContent: "space-between" }}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`编辑 ${config.name || config.provider}`}
+                        onClick={() => setEditingId(config.id)}
+                        onKeyDown={(event) => {
+                            if (event.target !== event.currentTarget) return;
+                            if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                setEditingId(config.id);
+                            }
+                        }}
+                    >
+                        <div className="min-w-0 flex flex-col gap-1">
+                            <span className="truncate text-[calc(14.4px*var(--app-text-scale,1))] font-bold leading-tight text-[var(--c-text-title)]">{config.name || config.provider}</span>
+                            <span className="menu-desc truncate">{config.defaultModel || config.provider || "未设置模型"}</span>
                         </div>
-                    ))}
-                </div>
-            )}
+                        <div className="flex gap-2 shrink-0 items-center justify-end">
+                            <button
+                                type="button"
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    setEditingId(config.id);
+                                }}
+                                className="ui-link-btn"
+                            >
+                                <FileEdit size={18} />
+                            </button>
+                            <button
+                                type="button"
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    setConfirmDeleteId(config.id);
+                                }}
+                                className="ui-link-btn"
+                                data-variant="danger"
+                            >
+                                <Trash2 size={18} />
+                            </button>
+                        </div>
+                    </div>
+                )}
+            </ConfigFolderBrowser>
 
             {editingId && (
                 <div className="modal-overlay modal-overlay-bottom">
                     <div className="modal-sheet" data-ui="modal-sheet">
                         <div className="modal-header" data-ui="modal-header">
-                            <button onClick={() => { if (isNewConfig && editingId) removeConfig(editingId); setIsNewConfig(false); setEditingId(null); }} className="modal-header-btn modal-header-btn-muted"><X size={18} /></button>
+                            <button onClick={async () => { if (isNewConfig && editingId && !await removeConfig(editingId)) return; setIsNewConfig(false); setEditingId(null); }} className="modal-header-btn modal-header-btn-muted"><X size={18} /></button>
                             <span className="modal-header-title">{isNewConfig ? "添加配置" : "编辑配置"}</span>
                             <button onClick={() => { setIsNewConfig(false); setEditingId(null); }} className="modal-header-btn modal-header-btn-action"><Check size={18} /></button>
                         </div>
 
                         <div className="modal-body hide-scrollbar flex flex-col gap-4 pb-10" data-ui="modal-body">
+                            {folders.error && <p role="alert" className="menu-desc">{folders.error}</p>}
                             {(() => {
                                 const config = configs.find(c => c.id === editingId);
                                 if (!config) return null;

@@ -1,4 +1,5 @@
 import type { DataModuleDefinition, DataModuleId } from "./types";
+import { CONFIG_FOLDER_KEYS } from "../config-folder-types";
 
 // localStorage keys owned by other modules. The catch-all "cache" module
 // (includeAll) excludes these so it never double-counts them in stats/backups
@@ -88,6 +89,7 @@ const PRIMARY_DATA_MODULES: DataModuleDefinition[] = [
         keys: [
           "ai_phone_api_configs_v1",
           "ai_phone_voice_configs_v1",
+          ...Object.values(CONFIG_FOLDER_KEYS),
           "ai_phone_image_generation_settings_v1",
           "ai_phone_bindings_v1",
           "ai_phone_follow_up_config_v1",

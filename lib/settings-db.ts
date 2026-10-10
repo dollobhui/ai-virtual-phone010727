@@ -202,6 +202,24 @@ export function writeWorldBooksCache(books: WorldBookConfig[]): void {
     }).catch(err => console.warn("[SettingsDB] save worldBooks failed:", err));
 }
 
+/** Add imported configs without replacing history or publishing failed imports
+ * to the cache. Parsers still own IDs and normalization. */
+export async function addImportedPresetCacheAsync(preset: PresetConfig): Promise<PresetConfig[]> {
+    if (!_hydrated) throw new Error("预设存储尚未读取成功");
+    const task = _presetsWriteQueue.then(() => settingsDb.presets.add(preset));
+    _presetsWriteQueue = task.then(() => undefined, () => undefined);
+    await task;
+    _presets = [preset, ...readPresetsCache()];
+    return [..._presets];
+}
+
+export async function addImportedWorldBookCacheAsync(book: WorldBookConfig): Promise<WorldBookConfig[]> {
+    if (!_hydrated) throw new Error("世界书存储尚未读取成功");
+    await settingsDb.worldBooks.add(book);
+    _worldBooks = [book, ...readWorldBooksCache()];
+    return [..._worldBooks];
+}
+
 export function writeRegexesCache(regexes: RegexConfig[]): void {
     _regexes = regexes;
     if (!_hydrated && typeof window !== "undefined") {

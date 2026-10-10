@@ -1,10 +1,14 @@
 "use client";
 
+import { ConfigFolderBrowser, ConfigFolderPicker } from "./config-folder-browser";
+import { useConfigFolders } from "@/lib/use-config-folders";
+
 import { useState, useEffect, useRef, useContext, useCallback, useMemo } from "react";
 import { Plus, Upload, Download, Trash2, RotateCcw, ChevronLeft, ChevronDown, GripVertical, MessageSquare, AlertCircle, Maximize2, Copy, Replace, CheckSquare, Check, Filter, MoreHorizontal } from "lucide-react";
 import {
     loadPresets,
     savePresets,
+    addImportedPresetAsync,
     createPreset,
     parsePresetFromJson,
     resetBuiltinPreset,
@@ -316,6 +320,7 @@ const AutoResizeTextarea = ({ value, onChange, placeholder, style, rows = 1, cla
 };
 
 export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) {
+    const folders = useConfigFolders("preset");
     const [presets, setPresets] = useState<PresetConfig[]>([]);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [viewMode, setViewMode] = useState<"list" | "detail">("list");
@@ -328,6 +333,8 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
     const [paramsOpen, setParamsOpen] = useState(false);
     const [parameterPickerOpen, setParameterPickerOpen] = useState(false);
     const [expandTarget, setExpandTarget] = useState<{ identifier: string; field: string } | null>(null);
+    const [importFolderOpen, setImportFolderOpen] = useState(false);
+    const importFolderRef = useRef<string | null>(null);
     const [importError, setImportError] = useState<string | null>(null);
     const [customApps, setCustomApps] = useState<InstalledCustomApp[]>([]);
     // ── 多选模式（右滑选中 / 批量操作 / 多选拖拽） ──
@@ -429,11 +436,14 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
             setOverrideBack(() => () => setViewMode("list"));
             const target = presets.find(p => p.id === editingId);
             setSubpageTitle(target?.name || "预设详情");
+        } else if (folders.currentFolderId !== null) {
+            setOverrideBack(() => () => folders.setCurrentFolderId(null));
+            setSubpageTitle(folders.metadata.folders.find(folder => folder.id === folders.currentFolderId)?.name ?? "未分类");
         } else {
             setOverrideBack(null);
             setSubpageTitle(null);
         }
-    }, [viewMode, editingId, presets, setOverrideBack, setSubpageTitle]);
+    }, [viewMode, editingId, presets, setOverrideBack, setSubpageTitle, folders.currentFolderId, folders.metadata.folders, folders.setCurrentFolderId]);
 
     useEffect(() => {
         // Reset scroll only when changing view/preset, not on every field edit.
@@ -659,11 +669,13 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
     }, []);
 
     const addPreset = useCallback(() => {
+        if (!folders.ready || folders.busy) return;
         const newPreset = createPreset("新预设");
         persist([newPreset, ...presets]);
+        void folders.assign(newPreset.id, folders.currentFolderId);
         setEditingId(newPreset.id);
         setViewMode("detail");
-    }, [persist, presets]);
+    }, [persist, presets, folders.assign, folders.currentFolderId, folders.ready, folders.busy]);
 
     const duplicatePreset = useCallback((preset: PresetConfig) => {
         const now = Date.now();
@@ -678,9 +690,10 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
             builtInVersion: undefined,
         };
         persist([copy, ...presets]);
+        void folders.assign(copy.id, folders.folderFor(preset.id));
         setEditingId(copy.id);
         setViewMode("detail");
-    }, [persist, presets]);
+    }, [persist, presets, folders.assign, folders.metadata]);
 
     useEffect(() => {
         if (viewMode !== "list") {
@@ -691,7 +704,8 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
             <div className="flex items-center gap-2">
                 <button
                     type="button"
-                    onClick={() => fileInputRef.current?.click()}
+                    onClick={() => setImportFolderOpen(true)}
+                    disabled={!folders.ready || folders.busy}
                     className="inline-flex h-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-[20px] border border-black/10 bg-white px-4 text-xs font-bold text-gray-800 shadow-sm transition-all hover:bg-gray-50 hover:shadow-md active:scale-95 focus:outline-none"
                 >
                     <Upload size={15} strokeWidth={1.8} />
@@ -700,6 +714,7 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
                 <button
                     type="button"
                     onClick={addPreset}
+                    disabled={!folders.ready || folders.busy}
                     className="inline-flex h-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-[20px] bg-black px-4 text-xs font-bold text-white shadow-sm transition-all hover:bg-gray-800 hover:shadow-md active:scale-95 focus:outline-none"
                 >
                     <Plus size={15} strokeWidth={1.8} />
@@ -1071,24 +1086,29 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
         reader.readAsText(file);
     };
 
-    const removePreset = (id: string) => {
+    const removePreset = async (id: string) => {
+        if (!await folders.removeAssociation(id)) return;
         const remaining = presets.filter(p => p.id !== id);
         persist(remaining);
         setViewMode("list");
     };
 
     const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const targetFolderId = importFolderRef.current;
+        importFolderRef.current = null;
         const file = e.target.files?.[0];
         if (!file) return;
 
         const reader = new FileReader();
-        reader.onload = (event) => {
+        reader.onload = async (event) => {
             try {
                 const text = event.target?.result as string;
                 const fallbackName = file.name.replace(/\.json$/i, '');
                 const parsed = parsePresetFromJson(text, fallbackName);
                 if (parsed) {
-                    persist([parsed, ...presets]);
+                    const next = await addImportedPresetAsync(parsed);
+                    setPresets(next);
+                    await folders.assign(parsed.id, targetFolderId);
                 } else {
                     setImportError("无法解析预设文件，格式不正确。");
                 }
@@ -1096,10 +1116,11 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
                 if (e instanceof Error && e.message === UNSUPPORTED_IMPORT_FORMAT) {
                     setImportError("不支持该预设格式");
                 } else {
-                    setImportError("无法解析预设文件，格式不正确。");
+                    setImportError("导入失败，请检查文件或存储空间；未建立分类关联。");
                 }
             }
         };
+        reader.onerror = () => setImportError("文件读取失败，未建立分类关联。");
         reader.readAsText(file);
         // Reset file input
         if (fileInputRef.current) {
@@ -1119,6 +1140,12 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
     return (
         <div ref={containerRef} className="flex flex-col gap-[24px] h-full">
             <input type="file" accept=".json" className="hidden" ref={fileInputRef} onChange={handleImport} />
+            {folders.error && viewMode === "detail" && <p role="alert" className="menu-desc">{folders.error}</p>}
+            {importFolderOpen && <ConfigFolderPicker controller={folders} title="选择导入目标文件夹" onCancel={() => setImportFolderOpen(false)} onSelect={id => {
+                importFolderRef.current = id;
+                setImportFolderOpen(false);
+                fileInputRef.current?.click();
+            }} />}
             <input type="file" accept=".json" className="hidden" ref={entryFileInputRef} onChange={handleEntryImportFile} />
             {viewMode === "list" ? (
                 <>
@@ -1126,58 +1153,41 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
                         <h2 className="m-0 mx-2 ts-28 font-bold italic leading-none text-black">Presets</h2>
                     </div>
 
-                    {presets.length === 0 ? (
-                        <div className="ui-empty mt-5">
-                            <div className="ui-icon-circle">
-                                <MessageSquare size={24} />
-                            </div>
-                            <span className="menu-label font-semibold">没有预设</span>
-                            <span className="menu-desc max-w-[240px]">
-                                预设用于定义 AI 的回复风格、行为设定和核心参数。
-                            </span>
-                            <div className="flex gap-3">
-                                <button onClick={addPreset} className="ui-btn ui-btn-primary">
-                                    <Plus size={16} /> 新建预设
-                                </button>
-                            </div>
-                        </div>
-                    ) : (
-                        <div className="flex flex-col gap-3">
-                            {presets.map(preset => (
-                                <div
-                                    key={preset.id}
-                                    className="ui-config-card min-w-0 cursor-pointer"
-                                    style={{ minHeight: "84px", padding: "16px", justifyContent: "space-between" }}
-                                    role="button"
-                                    tabIndex={0}
-                                    aria-label={`编辑 ${preset.name || "预设"}`}
-                                    onClick={() => { setEditingId(preset.id); setViewMode("detail"); }}
-                                    onKeyDown={(event) => {
-                                        if (event.target !== event.currentTarget) return;
-                                        if (event.key === "Enter" || event.key === " ") {
-                                            event.preventDefault();
-                                            setEditingId(preset.id);
-                                            setViewMode("detail");
-                                        }
-                                    }}
-                                >
-                                    <div className="min-w-0 flex flex-col gap-1.5">
-                                        <div className="min-w-0 flex items-center gap-[6px]">
-                                            <span className="truncate text-[calc(14.4px*var(--app-text-scale,1))] font-bold leading-tight text-[var(--c-text-title)]">{preset.name}</span>
-                                            {preset.builtIn && (
-                                                <span className="ui-badge shrink-0" data-variant="success">内置</span>
-                                            )}
-                                        </div>
-                                        <span className="menu-desc truncate">{preset.description || `包含 ${preset.prompts?.length || 0} 个设定条目`}</span>
+                    <ConfigFolderBrowser controller={folders} items={presets} searchText={preset => [preset.name, preset.description].filter(Boolean).join(" ")} columns={1}>
+                        {(preset) => (
+                            <div
+                                key={preset.id}
+                                className="ui-config-card min-w-0 cursor-pointer"
+                                style={{ minHeight: "84px", padding: "16px", justifyContent: "space-between" }}
+                                role="button"
+                                tabIndex={0}
+                                aria-label={`编辑 ${preset.name || "预设"}`}
+                                onClick={() => { setEditingId(preset.id); setViewMode("detail"); }}
+                                onKeyDown={(event) => {
+                                    if (event.target !== event.currentTarget) return;
+                                    if (event.key === "Enter" || event.key === " ") {
+                                        event.preventDefault();
+                                        setEditingId(preset.id);
+                                        setViewMode("detail");
+                                    }
+                                }}
+                            >
+                                <div className="min-w-0 flex flex-col gap-1.5">
+                                    <div className="min-w-0 flex items-center gap-[6px]">
+                                        <span className="truncate text-[calc(14.4px*var(--app-text-scale,1))] font-bold leading-tight text-[var(--c-text-title)]">{preset.name}</span>
+                                        {preset.builtIn && (
+                                            <span className="ui-badge shrink-0" data-variant="success">内置</span>
+                        )}
                                     </div>
-                                    <div className="flex items-center justify-between gap-2">
-                                        <span className="menu-desc ts-12">条目 {preset.prompts?.length || 0}</span>
-                                        <ChevronLeft size={16} style={{ transform: "rotate(180deg)", opacity: 0.4 }} />
-                                    </div>
+                                    <span className="menu-desc truncate">{preset.description || `包含 ${preset.prompts?.length || 0} 个设定条目`}</span>
                                 </div>
-                            ))}
-                        </div>
-                    )}
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="menu-desc ts-12">条目 {preset.prompts?.length || 0}</span>
+                                    <ChevronLeft size={16} style={{ transform: "rotate(180deg)", opacity: 0.4 }} />
+                                </div>
+                            </div>
+                        )}
+                    </ConfigFolderBrowser>
                 </>
             ) : (
                 <>

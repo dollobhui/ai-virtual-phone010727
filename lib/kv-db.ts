@@ -217,6 +217,20 @@ export async function kvSetAsync(key: string, value: string): Promise<void> {
     }
 }
 
+/** Durable read-modify-write. Cache changes only after the transaction commits.
+ * The transaction also prevents another tab's metadata update being overwritten. */
+export async function kvUpdateCommitted(key: string, update: (raw: string | null) => string): Promise<string> {
+    if (typeof window === "undefined" || !isKvHydrated()) throw new Error("存储尚未读取成功，请重试");
+    const value = await kvDb.transaction("rw", kvDb.entries, async () => {
+        const existing = await kvDb.entries.get(key);
+        const next = update(existing?.value ?? null);
+        await kvDb.entries.put({ key, value: next });
+        return next;
+    });
+    _cache.set(key, value);
+    return value;
+}
+
 // ── Delete ──
 export function kvRemove(key: string): void {
     _cache.delete(key);

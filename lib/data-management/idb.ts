@@ -21,6 +21,7 @@ import {
   type MediaResolver,
 } from "./serializers";
 import { kvEntries, kvGet, kvRemove, kvSetAsync } from "../kv-db";
+import { configFolderCategoryForKey, restoreConfigFolders } from "../config-folder-storage";
 
 type SourceStats = {
   records: number;
@@ -560,6 +561,18 @@ export async function importSource(
         const incoming = await deserializeStorageString(record.value, resolver);
         const existing = kvGet(record.key);
         const exists = existing !== null;
+        const folderCategory = configFolderCategoryForKey(record.key);
+        if (folderCategory) {
+          if (!overwrite) {
+            result.skipped += 1;
+            result.errors.push(`kv.${record.key}: 非覆盖恢复不合并文件夹分类，已保留当前分类；请使用覆盖恢复还原分类`);
+            continue;
+          }
+          await restoreConfigFolders(folderCategory, incoming, true);
+          if (exists) result.overwritten += 1;
+          else result.added += 1;
+          continue;
+        }
         if (!exists) {
           await kvSetAsync(record.key, incoming);
           result.added += 1;

@@ -3,6 +3,7 @@ import { downloadFile, type DownloadFileOptions } from "../download-utils";
 import { sha256BlobHex } from "../sha256-stream";
 import { CLOUD_CREDENTIAL_KV_KEYS, DATA_MODULES } from "./modules";
 import { clearSource, exportSource, importSource, inspectSource } from "./idb";
+import { finishConfigFolderRestore } from "../config-folder-storage";
 import { createMediaCollector, estimateValueBytes, utf8Bytes, type MediaCollector, type MediaResolver } from "./serializers";
 import type {
   BackupEnvelope,
@@ -504,6 +505,8 @@ export async function importBackupBlob(blob: Blob, moduleIds?: DataModuleId[], o
 
   const selected = moduleIds && moduleIds.length > 0 ? new Set(moduleIds) : null;
   const total: ImportResult = { added: 0, skipped: 0, overwritten: 0, errors: [] };
+  const folderRestoreKeys = new Set<string>();
+  let restoredSettings = false;
 
   // Pull each media binary straight from the zip, one at a time (low peak memory).
   // v1 backups have no media/ entries — markers there are inline base64, resolver is never hit.
@@ -535,7 +538,11 @@ export async function importBackupBlob(blob: Blob, moduleIds?: DataModuleId[], o
       continue;
     }
     if (selected && !selected.has(modulePayload.moduleId)) continue;
+    if (modulePayload.moduleId === "settings") restoredSettings = true;
     for (const sourcePayload of modulePayload.sources) {
+      if (modulePayload.moduleId === "settings" && sourcePayload.type === "kv") {
+        for (const record of sourcePayload.records) folderRestoreKeys.add(record.key);
+      }
       const result = await importSource(sourcePayload, Boolean(options.overwrite), resolver);
       total.added += result.added;
       total.skipped += result.skipped;
@@ -544,6 +551,9 @@ export async function importBackupBlob(blob: Blob, moduleIds?: DataModuleId[], o
     }
   }
 
+  if (options.overwrite && restoredSettings && total.errors.length === 0) {
+    total.errors.push(...await finishConfigFolderRestore(folderRestoreKeys));
+  }
   if (invalidMedia.size > 0) {
     total.errors.push(`${invalidMedia.size} 个媒体对象缺失或损坏，部分图片/文件可能丢失`);
   }

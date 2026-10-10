@@ -1,10 +1,14 @@
 "use client";
 
+import { ConfigFolderBrowser, ConfigFolderPicker } from "./config-folder-browser";
+import { useConfigFolders } from "@/lib/use-config-folders";
+
 import { useState, useEffect, useRef, useContext, useCallback } from "react";
 import { Plus, BookOpen, Trash2, Upload, Download, ChevronLeft, AlertCircle, Maximize2, Replace } from "lucide-react";
 import {
     loadWorldBooks,
     saveWorldBooks,
+    addImportedWorldBookAsync,
     createWorldBook,
     parseWorldBookFromJson,
     loadBindingConfig,
@@ -18,6 +22,7 @@ import { SwipeActionRow, useSwipeActions } from "@/components/ui/swipe-actions";
 import { notifyMascotPageContext } from "@/lib/mascot-events";
 
 export function WorldBookManager({ isActive = true }: { isActive?: boolean } = {}) {
+    const folders = useConfigFolders("worldbook");
     const [books, setBooks] = useState<WorldBookConfig[]>([]);
     const [activeBookId, setActiveBookId] = useState<string>("");
     const [viewMode, setViewMode] = useState<"list" | "detail">("list");
@@ -25,6 +30,8 @@ export function WorldBookManager({ isActive = true }: { isActive?: boolean } = {
     const [confirmDeleteTarget, setConfirmDeleteTarget] = useState<{ type: 'book' | 'entry', id: string } | null>(null);
     const [isLoaded, setIsLoaded] = useState(false);
     const [expandUid, setExpandUid] = useState<string | null>(null);
+    const [importFolderOpen, setImportFolderOpen] = useState(false);
+    const importFolderRef = useRef<string | null>(null);
     const [importError, setImportError] = useState<string | null>(null);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -52,11 +59,14 @@ export function WorldBookManager({ isActive = true }: { isActive?: boolean } = {
             setOverrideBack(() => () => setViewMode("list"));
             const target = books.find(b => b.id === activeBookId);
             setSubpageTitle(target?.name || "世界书详情");
+        } else if (folders.currentFolderId !== null) {
+            setOverrideBack(() => () => folders.setCurrentFolderId(null));
+            setSubpageTitle(folders.metadata.folders.find(folder => folder.id === folders.currentFolderId)?.name ?? "未分类");
         } else {
             setOverrideBack(null);
             setSubpageTitle(null);
         }
-    }, [viewMode, activeBookId, books, setOverrideBack, setSubpageTitle]);
+    }, [viewMode, activeBookId, books, setOverrideBack, setSubpageTitle, folders.currentFolderId, folders.metadata.folders, folders.setCurrentFolderId]);
 
     useEffect(() => {
         const scrollParent = wbContainerRef.current?.closest(".page-body");
@@ -237,11 +247,13 @@ export function WorldBookManager({ isActive = true }: { isActive?: boolean } = {
 
     // --- Book Level Operations ---
     const addBook = useCallback(() => {
+        if (!folders.ready || folders.busy) return;
         const newBook = createWorldBook("新世界书");
         persist([newBook, ...books]);
+        void folders.assign(newBook.id, folders.currentFolderId);
         setActiveBookId(newBook.id);
         setViewMode("detail");
-    }, [books, persist]);
+    }, [books, persist, folders.assign, folders.currentFolderId, folders.ready, folders.busy]);
 
     useEffect(() => {
         if (viewMode !== "list") {
@@ -252,7 +264,8 @@ export function WorldBookManager({ isActive = true }: { isActive?: boolean } = {
             <div className="flex items-center gap-2">
                 <button
                     type="button"
-                    onClick={() => fileInputRef.current?.click()}
+                    onClick={() => setImportFolderOpen(true)}
+                    disabled={!folders.ready || folders.busy}
                     className="inline-flex h-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-[20px] border border-black/10 bg-white px-4 text-xs font-bold text-gray-800 shadow-sm transition-all hover:bg-gray-50 hover:shadow-md active:scale-95 focus:outline-none"
                 >
                     <Upload size={15} strokeWidth={1.8} />
@@ -261,6 +274,7 @@ export function WorldBookManager({ isActive = true }: { isActive?: boolean } = {
                 <button
                     type="button"
                     onClick={addBook}
+                    disabled={!folders.ready || folders.busy}
                     className="inline-flex h-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-[20px] bg-black px-4 text-xs font-bold text-white shadow-sm transition-all hover:bg-gray-800 hover:shadow-md active:scale-95 focus:outline-none"
                 >
                     <Plus size={15} strokeWidth={1.8} />
@@ -275,7 +289,8 @@ export function WorldBookManager({ isActive = true }: { isActive?: boolean } = {
         persist(books.map(b => b.id === id ? { ...b, ...updates, updatedAt: Date.now() } : b));
     };
 
-    const removeBook = (id: string) => {
+    const removeBook = async (id: string) => {
+        if (!await folders.removeAssociation(id)) return;
         const remaining = books.filter(b => b.id !== id);
         persist(remaining);
         setViewMode("list");
@@ -287,16 +302,20 @@ export function WorldBookManager({ isActive = true }: { isActive?: boolean } = {
     };
 
     const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const targetFolderId = importFolderRef.current;
+        importFolderRef.current = null;
         const file = e.target.files?.[0];
         if (!file) return;
 
         const reader = new FileReader();
-        reader.onload = (event) => {
+        reader.onload = async (event) => {
             try {
                 const text = event.target?.result as string;
                 const parsed = parseWorldBookFromJson(text);
                 if (parsed) {
-                    persist([parsed, ...books]);
+                    const next = await addImportedWorldBookAsync(parsed);
+                    setBooks(next);
+                    await folders.assign(parsed.id, targetFolderId);
                     setActiveBookId(parsed.id);
                 } else {
                     setImportError("无法解析世界书文件，格式不正确。");
@@ -305,10 +324,11 @@ export function WorldBookManager({ isActive = true }: { isActive?: boolean } = {
                 if (e instanceof Error && e.message === UNSUPPORTED_IMPORT_FORMAT) {
                     setImportError("不支持该世界书格式");
                 } else {
-                    setImportError("无法解析世界书文件，格式不正确。");
+                    setImportError("导入失败，请检查文件或存储空间；未建立分类关联。");
                 }
             }
         };
+        reader.onerror = () => setImportError("文件读取失败，未建立分类关联。");
         reader.readAsText(file);
         if (fileInputRef.current) fileInputRef.current.value = "";
     };
@@ -473,6 +493,12 @@ export function WorldBookManager({ isActive = true }: { isActive?: boolean } = {
     return (
         <div ref={wbContainerRef} className="flex flex-col gap-5 h-full">
             <input type="file" accept=".json" className="hidden" ref={fileInputRef} onChange={handleImport} />
+            {folders.error && viewMode === "detail" && <p role="alert" className="menu-desc">{folders.error}</p>}
+            {importFolderOpen && <ConfigFolderPicker controller={folders} title="选择导入目标文件夹" onCancel={() => setImportFolderOpen(false)} onSelect={id => {
+                importFolderRef.current = id;
+                setImportFolderOpen(false);
+                fileInputRef.current?.click();
+            }} />}
             <input type="file" accept=".json" className="hidden" ref={entryFileInputRef} onChange={handleEntryImportFile} />
             {viewMode === "list" ? (
                 <>
@@ -480,54 +506,39 @@ export function WorldBookManager({ isActive = true }: { isActive?: boolean } = {
                         <h2 className="m-0 mx-2 ts-28 font-bold italic leading-none text-black">Worldbooks</h2>
                     </div>
 
-                    {books.length === 0 ? (
-                        <div className="ui-empty mt-2">
-                            <div className="ui-icon-circle">
-                                <BookOpen size={24} />
-                            </div>
-                            <span className="menu-label font-semibold">没有世界书</span>
-                            <span className="menu-desc text-center max-w-[240px] !mt-0">
-                                世界书用于为 AI 提供长期记忆和背景知识，当触发特定词汇时自动插入设定。
-                            </span>
-                            <button onClick={addBook} className="ui-btn ui-btn-primary mt-2">
-                                <Plus size={16} /> 新建世界书
-                            </button>
-                        </div>
-                    ) : (
-                        <div className="grid grid-cols-2 gap-3">
-                            {books.map(book => (
-                                <div
-                                    key={book.id}
-                                    className="ui-config-card min-w-0 cursor-pointer"
-                                    style={{ aspectRatio: "3 / 2", padding: "12px", justifyContent: "space-between" }}
-                                    role="button"
-                                    tabIndex={0}
-                                    aria-label={`编辑 ${book.name || "世界书"}`}
-                                    onClick={() => { setActiveBookId(book.id); setViewMode("detail"); }}
-                                    onKeyDown={(event) => {
-                                        if (event.target !== event.currentTarget) return;
-                                        if (event.key === "Enter" || event.key === " ") {
-                                            event.preventDefault();
-                                            setActiveBookId(book.id);
-                                            setViewMode("detail");
-                                        }
-                                    }}
-                                >
-                                    <div className="min-w-0 flex flex-col gap-1.5">
-                                        <div className="min-w-0 flex items-center gap-[6px]">
-                                            <BookOpen size={16} className="shrink-0" />
-                                            <span className="truncate text-[calc(14.4px*var(--app-text-scale,1))] font-bold leading-tight text-[var(--c-text-title)]">{book.name}</span>
-                                        </div>
-                                        <span className="menu-desc truncate">{book.description || `${book.entries?.length || 0} 个条目`}</span>
+                    <ConfigFolderBrowser controller={folders} items={books} searchText={book => [book.name, book.description].filter(Boolean).join(" ")} columns={2}>
+                        {(book) => (
+                            <div
+                                key={book.id}
+                                className="ui-config-card min-w-0 cursor-pointer"
+                                style={{ aspectRatio: "3 / 2", padding: "12px", justifyContent: "space-between" }}
+                                role="button"
+                                tabIndex={0}
+                                aria-label={`编辑 ${book.name || "世界书"}`}
+                                onClick={() => { setActiveBookId(book.id); setViewMode("detail"); }}
+                                onKeyDown={(event) => {
+                                    if (event.target !== event.currentTarget) return;
+                                    if (event.key === "Enter" || event.key === " ") {
+                                        event.preventDefault();
+                                        setActiveBookId(book.id);
+                                        setViewMode("detail");
+                                    }
+                                }}
+                            >
+                                <div className="min-w-0 flex flex-col gap-1.5">
+                                    <div className="min-w-0 flex items-center gap-[6px]">
+                                        <BookOpen size={16} className="shrink-0" />
+                                        <span className="truncate text-[calc(14.4px*var(--app-text-scale,1))] font-bold leading-tight text-[var(--c-text-title)]">{book.name}</span>
                                     </div>
-                                    <div className="flex items-center justify-between gap-2">
-                                        <span className="menu-desc ts-12">条目 {book.entries?.length || 0}</span>
-                                        <ChevronLeft size={16} className="opacity-40" style={{ transform: "rotate(180deg)" }} />
-                                    </div>
+                                    <span className="menu-desc truncate">{book.description || `${book.entries?.length || 0} 个条目`}</span>
                                 </div>
-                            ))}
-                        </div>
-                    )}
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="menu-desc ts-12">条目 {book.entries?.length || 0}</span>
+                                    <ChevronLeft size={16} className="opacity-40" style={{ transform: "rotate(180deg)" }} />
+                                </div>
+                            </div>
+                        )}
+                    </ConfigFolderBrowser>
                 </>
             ) : (
                 <>

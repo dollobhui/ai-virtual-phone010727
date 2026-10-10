@@ -3,6 +3,7 @@ import { importSource } from "../data-management/idb";
 import { createMediaCollector, utf8Bytes, type MediaResolver } from "../data-management/serializers";
 import type { DataModuleId, ModulePayload } from "../data-management/types";
 import { kvGet, kvSet, registerKvMigration } from "../kv-db";
+import { finishConfigFolderRestore } from "../config-folder-storage";
 import { sha256BlobHex, sha256TextHex } from "../sha256-stream";
 import type { CloudBackupConfig } from "./config";
 import { ensureBucket, getObject, listObjects, putObject, removeObject } from "./storage-client";
@@ -817,6 +818,8 @@ async function restoreFromCloudManifestInternal(
   ])).size;
   const restoreTotalBytes = Math.max(1, selectedModules.reduce((s, m) => s + (m.bytes || 1), 0));
   let restoreDoneBytes = 0;
+  const folderRestoreKeys = new Set<string>();
+  let restoredSettings = false;
   const restorePercent = (fraction: number) => 2 + Math.min(97, 97 * (restoreDoneBytes + fraction) / restoreTotalBytes);
 
   for (const mod of manifest.modules) {
@@ -896,7 +899,12 @@ async function restoreFromCloudManifestInternal(
           });
         };
         try {
-          const result = await importSource(payload.sources[sourceIndex], Boolean(options.overwrite), resolver, importProgress);
+          const source = payload.sources[sourceIndex];
+          if (mod.id === "settings") {
+            restoredSettings = true;
+            if (source.type === "kv") for (const record of source.records) folderRestoreKeys.add(record.key);
+          }
+          const result = await importSource(source, Boolean(options.overwrite), resolver, importProgress);
           total.added += result.added;
           total.skipped += result.skipped;
           total.overwritten += result.overwritten;
@@ -911,6 +919,9 @@ async function restoreFromCloudManifestInternal(
   }
   if (invalidMedia.size > 0) {
     total.errors.push(`${invalidMedia.size} 个媒体对象缺失或损坏，部分图片/文件可能丢失`);
+  }
+  if (options.overwrite && restoredSettings && total.errors.length === 0) {
+    total.errors.push(...await finishConfigFolderRestore(folderRestoreKeys));
   }
   onProgress({ percent: 100, detail: "完成" });
   return total;

@@ -36,6 +36,7 @@ import {
     readPresetsCache, writePresetsCache,
     writePresetsCacheAsync,
     readWorldBooksCache, writeWorldBooksCache,
+    addImportedPresetCacheAsync, addImportedWorldBookCacheAsync,
     readRegexesCache, writeRegexesCache,
     hydrateSettingsDb,
 } from "./settings-db";
@@ -417,6 +418,16 @@ export function loadWorldBooks(): WorldBookConfig[] {
 export function saveWorldBooks(books: WorldBookConfig[]): void {
     if (typeof window === "undefined") return;
     writeWorldBooksCache(books);
+}
+
+export async function addImportedPresetAsync(preset: PresetConfig): Promise<PresetConfig[]> {
+    const result = await addImportedPresetCacheAsync(stripDeprecatedPresetFields(preset));
+    window.dispatchEvent(new CustomEvent("settings-presets-updated"));
+    return result;
+}
+
+export async function addImportedWorldBookAsync(book: WorldBookConfig): Promise<WorldBookConfig[]> {
+    return addImportedWorldBookCacheAsync(book);
 }
 
 export function createWorldBook(name: string): WorldBookConfig {
