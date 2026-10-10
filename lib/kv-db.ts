@@ -189,10 +189,18 @@ export function kvGet(key: string): string | null {
 }
 
 // ── Write: update cache + fire-and-forget to IDB ──
-export function kvSet(key: string, value: string): void {
+export function kvSet(key: string, value: string, mergeCommitted?: (existing: string | null, incoming: string) => string): void {
+    if (mergeCommitted) value = mergeCommitted(kvGet(key), value);
     _cache.set(key, value);
     if (isManagedLegacyKey(key)) writeFallbackLocalStorage(key, value);
-    kvDb.entries.put({ key, value }).then(() => {
+    const write = mergeCommitted ? kvDb.transaction("rw", kvDb.entries, async () => {
+        const existing = await kvDb.entries.get(key);
+        const committed = mergeCommitted(existing?.value ?? null, value);
+        await kvDb.entries.put({ key, value: committed });
+        return committed;
+    }) : kvDb.entries.put({ key, value }).then(() => value);
+    write.then(committed => {
+        if (mergeCommitted) _cache.set(key, committed);
         if (isManagedLegacyKey(key)) removeLegacyLocalStorageKeyIfValue(key, value);
     }).catch(err => {
         writeFallbackLocalStorage(key, value);
@@ -219,11 +227,19 @@ export async function kvSetAsync(key: string, value: string): Promise<void> {
 
 /** Durable read-modify-write. Cache changes only after the transaction commits.
  * The transaction also prevents another tab's metadata update being overwritten. */
-export async function kvUpdateCommitted(key: string, update: (raw: string | null) => string): Promise<string> {
+export async function kvUpdateCommitted(
+    key: string,
+    update: (raw: string | null, dependencies: Record<string, string | null>) => string,
+    readKeys: string[] = [],
+): Promise<string> {
     if (typeof window === "undefined" || !isKvHydrated()) throw new Error("存储尚未读取成功，请重试");
     const value = await kvDb.transaction("rw", kvDb.entries, async () => {
         const existing = await kvDb.entries.get(key);
-        const next = update(existing?.value ?? null);
+        const dependencies: Record<string, string | null> = {};
+        for (const readKey of readKeys) {
+            dependencies[readKey] = (await kvDb.entries.get(readKey))?.value ?? null;
+        }
+        const next = update(existing?.value ?? null, dependencies);
         await kvDb.entries.put({ key, value: next });
         return next;
     });

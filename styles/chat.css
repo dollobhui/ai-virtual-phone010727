@@ -7226,3 +7226,75 @@
   background: currentColor;
   animation: chat-stream-cursor-blink 1s steps(2, start) infinite;
 }
+.chat-model-switch-dialog {
+    width: min(420px, calc(100vw - 32px));
+    max-height: min(560px, calc(100dvh - 48px));
+}
+.chat-model-switch-dialog .modal-header {
+    display: flex;
+    flex-direction: row;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+}
+.chat-model-switch-dialog .modal-body {
+    overflow-y: auto;
+    text-align: left;
+}
+.chat-model-switch-hint {
+    margin: 0 0 14px;
+    font-size: 13px;
+    color: var(--c-text-muted, #777);
+}
+.chat-model-switch-error {
+    margin: 0 0 14px;
+    font-size: 13px;
+    color: var(--c-danger, #b42318);
+}
+.chat-model-switch-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.chat-model-switch-option {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 48px;
+    padding: 12px 14px;
+    border: 1px solid var(--c-border, #ddd);
+    border-radius: 12px;
+    background: var(--c-surface, transparent);
+    color: var(--c-text);
+    text-align: left;
+    overflow-wrap: anywhere;
+}
+.chat-model-switch-option[aria-pressed="true"] {
+    border-color: var(--c-text);
+}
+.chat-model-switch-option:disabled,
+.chat-plus-menu-item:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.chat-model-switch-missing {
+    position: absolute;
+    bottom: var(--chat-bottom-reserve, 120px);
+    left: 0;
+    right: 0;
+    z-index: 11;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 16px;
+    font-size: 12px;
+    color: var(--c-danger, #b42318);
+    background: var(--c-surface, #fff);
+}
+.chat-model-switch-missing button {
+    flex-shrink: 0;
+    text-decoration: underline;
+}

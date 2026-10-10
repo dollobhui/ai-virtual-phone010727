@@ -19,6 +19,7 @@ import {
 } from "./chat-storage";
 import type { ChatMessage, StateValue } from "./chat-storage";
 import { generateChatCompletion, flattenCompletionResult } from "./chat-engine";
+import { OnlineTextApiUnavailableError, OnlineTextBusyError } from "./online-text-generation";
 import { armFollowUpBailout, armIdleReconnectBailout, cancelBailoutKey, cancelBailoutPrefix, cancelFollowUpBailout, startBailoutHeartbeat } from "./push-bailout-client";
 import { isWithinPushQuietHours } from "./push-client";
 import {
@@ -232,6 +233,10 @@ export async function requestBackgroundChatReply(sessionId: string): Promise<{ o
         return { ok: true };
     } catch (error: any) {
         console.error("[BackgroundReply] Error:", error);
+        if (error instanceof OnlineTextApiUnavailableError || error instanceof OnlineTextBusyError) {
+            window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId } }));
+            return { ok: false };
+        }
         pushChatMessage({
             sessionId,
             role: "system",
@@ -518,6 +523,10 @@ async function fireFollowUp(sched: { sessionId: string; count: number; delaySec?
 
     } catch (error: any) {
         console.error(`[FollowUp] Error:`, error);
+        if (error instanceof OnlineTextApiUnavailableError || error instanceof OnlineTextBusyError) {
+            window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: sched.sessionId } }));
+            return;
+        }
         pushChatMessage({
             sessionId: sched.sessionId,
             role: "system",
@@ -678,6 +687,10 @@ async function fireTimedWake(sched: TimedWakeSchedule) {
         window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: session.id } }));
     } catch (error: any) {
         console.error("[TimedWake] Error:", error);
+        if (error instanceof OnlineTextApiUnavailableError || error instanceof OnlineTextBusyError) {
+            window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: sched.sessionId } }));
+            return;
+        }
         const failureLabel = sched.source === "user" ? "定时主动消息" : "稍后主动联系";
         pushChatMessage({
             sessionId: sched.sessionId,
@@ -748,6 +761,10 @@ async function fireMenstrualPeriodCare(input: {
         window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: session.id } }));
     } catch (error: any) {
         console.error("[PeriodCare] Error:", error);
+        if (error instanceof OnlineTextApiUnavailableError || error instanceof OnlineTextBusyError) {
+            window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: input.sessionId } }));
+            return;
+        }
         pushChatMessage({
             sessionId: input.sessionId,
             role: "system",

@@ -27,6 +27,7 @@ import type { ApiConfig, PresetConfig, Prompt, PromptOrderEntry, RegexConfig } f
 import type { CustomAppPromptProfile } from "./custom-app-types";
 import {
     resolveBinding,
+    resolveOnlineTextBinding,
     loadBindingConfig,
     loadApiConfigs,
     loadPresets,
@@ -89,6 +90,7 @@ import {
 } from "./bilingual-prompt-defaults";
 import { parseOfflineResponse, extractThinkingTag, type ParsedOfflineResponse } from "./chat-offline-storage";
 import { throwIfAborted } from "./abort-utils";
+import { beginOnlineTextGeneration, isOrdinaryOnlineTextRequest, OnlineTextApiUnavailableError } from "./online-text-generation";
 import { armShortcutContinuation, SHORTCUT_VISION_OFF_NOTE, type ShortcutContinuationHandle, type ShortcutContinuationStyle } from "./shortcut-continuation-client";
 
 
@@ -1782,15 +1784,25 @@ export async function buildChatPromptMessages(
 
     const resolvedAppId = options?.appId ?? "chat";
     const bindings = loadBindingConfig();
-    const activeSlot = resolveBinding(bindings, character.id, resolvedAppId);
+    const onlineText = isOrdinaryOnlineTextRequest(session.isGroup, options);
+    const activeSlot = onlineText ? resolveOnlineTextBinding(bindings, character.id)
+        : resolveBinding(bindings, character.id, resolvedAppId);
 
     if (!activeSlot.apiConfigId) {
+        if (onlineText && bindings.characterBindings.find(binding => binding.characterId === character.id)?.onlineText) {
+            throw new OnlineTextApiUnavailableError();
+        }
         throw new ChatEngineError(`No API Configuration bound for ${character.name}. Please go to Settings -> Chat to assign one.`);
     }
 
     const apiConfigs = loadApiConfigs();
     const config = apiConfigs.find(c => c.id === activeSlot.apiConfigId);
-    if (!config) throw new ChatEngineError(`API Configuration not found for ${character.name}.`);
+    if (!config) {
+        if (onlineText && bindings.characterBindings.find(binding => binding.characterId === character.id)?.onlineText) {
+            throw new OnlineTextApiUnavailableError();
+        }
+        throw new ChatEngineError(`API Configuration not found for ${character.name}.`);
+    }
 
     const presets = loadPresets();
     let preset = activeSlot.presetId ? presets.find(p => p.id === activeSlot.presetId) || null : null;
@@ -2483,6 +2495,11 @@ export async function generateChatCompletion(
     options?: ChatPromptBuildOptions & { signal?: AbortSignal },
     callbacks?: ChatCompletionCallbacks,
 ): Promise<ChatCompletionResult> {
+    const onlineRun = isOrdinaryOnlineTextRequest(session.isGroup, options)
+        ? beginOnlineTextGeneration(session.contactId,
+            resolveOnlineTextBinding(loadBindingConfig(), session.contactId).apiConfigId, options?.signal)
+        : null;
+    const runOptions = onlineRun ? { ...options, signal: onlineRun.signal } : options;
     // 发送兜底（离线推送）：生成期间在服务端挂一张带心跳租约的保险单，
     // 本地完成即撤销；App 被杀则心跳停跳，服务端接管生成并推送。
     const bailoutRef: ReplyBailoutRef = {
@@ -2494,9 +2511,12 @@ export async function generateChatCompletion(
         shortcutCancelled: false,
     };
     try {
-        return await generateChatCompletionCore(session, history, options, callbacks, bailoutRef);
+        const result = await generateChatCompletionCore(session, history, runOptions, callbacks, bailoutRef);
+        throwIfAborted(runOptions?.signal);
+        return result;
     } catch (err) {
-        if (options?.signal?.aborted) bailoutRef.shortcutCancelled = true;
+        if (runOptions?.signal?.aborted) bailoutRef.shortcutCancelled = true;
+        if (onlineRun?.signal.reason instanceof OnlineTextApiUnavailableError) throw onlineRun.signal.reason;
         throw err;
     } finally {
         bailoutRef.closed = true;
@@ -2505,6 +2525,7 @@ export async function generateChatCompletion(
             if (bailoutRef.shortcutCompleted || bailoutRef.shortcutCancelled) handle.settle();
             else handle.release();
         }
+        onlineRun?.finish();
     }
 }
 

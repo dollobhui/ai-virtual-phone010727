@@ -40,8 +40,10 @@ import {
     readRegexesCache, writeRegexesCache,
     hydrateSettingsDb,
 } from "./settings-db";
-import { kvGet, kvSet, kvRemove, registerKvMigration } from "./kv-db";
+import { kvGet, kvSet, kvRemove, kvUpdateCommitted, registerKvMigration } from "./kv-db";
+import { cancelOnlineTextGenerationsForMissingApis, withOnlineTextSwitch } from "./online-text-generation";
 import { isGenerationParameterKey } from "./generation-parameters";
+import { loadCharacters } from "./character-storage";
 
 // --- Unsupported import format detection ---
 export const UNSUPPORTED_IMPORT_FORMAT = "UNSUPPORTED_IMPORT_FORMAT";
@@ -655,7 +657,26 @@ export function loadApiConfigs(): ApiConfig[] {
 
 export function saveApiConfigs(configs: ApiConfig[]): void {
     if (typeof window === "undefined") return;
+    const validIds = new Set(configs.map(config => config.id));
+    const removedIds = new Set(loadApiConfigs().filter(config => !validIds.has(config.id)).map(config => config.id));
+    if (removedIds.size) {
+        let bindings = loadBindingConfig();
+        const characterIds = new Set([...loadCharacters().map(character => character.id), ...bindings.characterBindings.map(binding => binding.characterId)]);
+        let changed = false;
+        for (const characterId of characterIds) {
+            const slot = resolveOnlineTextBinding(bindings, characterId);
+            if (!slot.apiConfigId || !removedIds.has(slot.apiConfigId)) continue;
+            const binding = getCharacterBinding(bindings, characterId);
+            if (binding.onlineText) continue;
+            // Freeze the effective ID before legacy cleanup can erase its inheritance source.
+            bindings = setCharacterBinding(bindings, { ...binding, onlineText: { apiConfigId: slot.apiConfigId } });
+            changed = true;
+        }
+        if (changed) saveBindingConfig(bindings);
+    }
     kvSet(API_CONFIGS_KEY, JSON.stringify(configs.map(normalizeApiConfig)));
+    cancelOnlineTextGenerationsForMissingApis(validIds);
+    window.dispatchEvent(new CustomEvent("settings-api-configs-updated"));
 }
 
 // --- Voice Configs ──────────────────────────────────────────
@@ -911,9 +932,25 @@ export function loadBindingConfig(): BindingConfig {
     }
 }
 
+function preserveOnlineTextSelections(raw: string | null, incoming: string): string {
+    // Legacy binding editors own the original slots, not the independent text selection.
+    // A page loaded before a switch must not erase it when saving another setting.
+    let next = JSON.parse(incoming) as BindingConfig;
+    if (raw) {
+        let previous: BindingConfig | undefined;
+        try { previous = JSON.parse(raw) as BindingConfig; } catch { /* Allow the existing editor to repair corrupt data. */ }
+        for (const binding of Array.isArray(previous?.characterBindings) ? previous.characterBindings : []) {
+            if (!binding.onlineText) continue;
+            const target = getCharacterBinding(next, binding.characterId);
+            next = setCharacterBinding(next, { ...target, onlineText: binding.onlineText });
+        }
+    }
+    return JSON.stringify(next);
+}
+
 export function saveBindingConfig(config: BindingConfig, notify: boolean = true): void {
     if (typeof window === "undefined") return;
-    kvSet(BINDINGS_KEY, JSON.stringify(config));
+    kvSet(BINDINGS_KEY, JSON.stringify(config), preserveOnlineTextSelections);
     if (notify) window.dispatchEvent(new CustomEvent("settings-bindings-updated"));
 }
 
@@ -1010,6 +1047,32 @@ export function setCharacterBinding(config: BindingConfig, binding: CharacterBin
         newBindings.push(binding);
     }
     return { ...config, characterBindings: newBindings };
+}
+
+/** Only the API is overridden. Preset, world books, voice and identity remain unchanged. */
+export function resolveOnlineTextBinding(config: BindingConfig, characterId: string): BindingSlot {
+    const slot = resolveBinding(config, characterId, "chat");
+    const onlineText = config.characterBindings.find(binding => binding.characterId === characterId)?.onlineText;
+    return onlineText ? { ...slot, apiConfigId: onlineText.apiConfigId } : slot;
+}
+
+export async function saveOnlineTextApiConfig(characterId: string, apiConfigId: string): Promise<void> {
+    if (!characterId || !apiConfigId) throw new Error("请选择有效的 API 配置");
+    await withOnlineTextSwitch(characterId, async () => {
+        // The latest committed document prevents overwriting another role's selection.
+        await kvUpdateCommitted(BINDINGS_KEY, (raw, dependencies) => {
+            const apiConfigs = JSON.parse(dependencies[API_CONFIGS_KEY] ?? "[]") as ApiConfig[];
+            if (!apiConfigs.some(config => config.id === apiConfigId)) throw new Error("该 API 配置已删除，请重新选择");
+            const config = raw ? normalizeBindingConfig(JSON.parse(raw) as BindingConfig).config
+                : loadBindingConfig();
+            const binding = getCharacterBinding(config, characterId);
+            return JSON.stringify(setCharacterBinding(config, {
+                ...binding,
+                onlineText: { apiConfigId },
+            }));
+        }, [API_CONFIGS_KEY]);
+        window.dispatchEvent(new CustomEvent("settings-bindings-updated"));
+    });
 }
 
 /**

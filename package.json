@@ -16,6 +16,8 @@
     "weixin:build-dist": "node scripts/build-weixin-assistant-dist.mjs",
     "push:build-dist": "node scripts/build-personal-push-dist.mjs",
     "build:glass-icons": "node scripts/build-glass-icons.mjs",
+    "test:online-text-model": "node --test scripts/test-online-text-model.cjs",
+    "test:online-text-model:ui": "node scripts/test-online-text-model-ui.cjs",
     "test:config-folders": "node --test scripts/test-config-folders.cjs",
     "test:config-folders:ui": "node scripts/test-config-folders-ui.cjs"
   },

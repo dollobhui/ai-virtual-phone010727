@@ -10,6 +10,8 @@ import { isKnownStickerLabel } from "@/lib/sticker-data";
 import { translateReasoningText } from "@/lib/reasoning-translate";
 import { MessageBubble, MediaDetailModal, prewarmStickerCache, BilingualTextBlock, isStandaloneHtmlPreviewContent, normalizeTextBubbleContent } from "./message-bubble";
 import { GeneratedImageErrorDialog } from "./generated-image-error-dialog";
+import { ModelSwitchDialog } from "./model-switch-dialog";
+import { ONLINE_TEXT_STATE_UPDATED, ONLINE_TEXT_API_MISSING_MESSAGE, OnlineTextApiUnavailableError, OnlineTextBusyError, isOnlineTextBusy } from "@/lib/online-text-generation";
 import { PhotoInputModal, TextPhotoModal, VoiceRecordModal, RedPacketModal, LocationInputModal, SystemInstructionModal } from "./rich-input-modals";
 import { EmojiPanel, StickerPanel } from "./emoji-panel";
 import { StickerSearchSuggest } from "./sticker-search-suggest";
@@ -43,7 +45,7 @@ import { TransferTargetModal } from "./transfer-target-modal";
 import { GiftPickerModal } from "./gift-picker-modal";
 import { ConfirmDialog } from "@/components/ui/modal";
 import { deleteWeixinCloudMessagesFromCloud, emitWeixinSyncToast, syncAllWeixinBotRuntimesToCloud } from "@/lib/weixin-cloud-sync";
-import { loadBindingConfig, loadPresets, loadRegexes, resolveBinding, resolveUserIdentity } from "@/lib/settings-storage";
+import { loadApiConfigs, loadBindingConfig, loadPresets, loadRegexes, resolveBinding, resolveUserIdentity } from "@/lib/settings-storage";
 import { generateGroupChatCompletion, generateGroupOfflineChatCompletion, parseGroupChatResponse, buildEditableGroupRoundText } from "@/lib/group-chat-engine";
 import { appendChatOfflineTurn, deleteChatOfflineTurn, deleteChatOfflineTurnsFrom, extractThinkingTag, loadChatOfflineTurns, parseOfflineResponse, saveChatOfflineTurns, updateChatOfflineTurn, type ChatOfflineTurn } from "@/lib/chat-offline-storage";
 import { applyDisplayRegex, applyEditRegex } from "@/lib/llm-prompt-assembler";
@@ -622,6 +624,9 @@ const ChatTextInputBar = memo(forwardRef<ChatTextInputHandle, {
     onCloseTheaterMode: () => void;
     onOpenRichModal: (modal: RichModalKind) => void;
     onOpenCustomPlusAction: (action: RegisteredCustomAppChatPlusAction) => void;
+    modelSwitchDisabled: boolean;
+    modelSwitchAvailable: boolean;
+    onSwitchModel: () => void;
     onStartVideoCall: () => void;
     onStartVoiceCall: () => void;
     onSendText: (text: string, options?: { autoReply?: boolean }) => boolean;
@@ -653,6 +658,9 @@ const ChatTextInputBar = memo(forwardRef<ChatTextInputHandle, {
     onCloseTheaterMode,
     onOpenRichModal,
     onOpenCustomPlusAction,
+    modelSwitchDisabled,
+    modelSwitchAvailable,
+    onSwitchModel,
     onStartVideoCall,
     onStartVoiceCall,
     onSendText,
@@ -718,6 +726,7 @@ const ChatTextInputBar = memo(forwardRef<ChatTextInputHandle, {
     );
     const suggestEnabled = !inputLocked && !panelOpen && !suggestClosed && inputText.trim().length > 0;
     const plusMenuItems = [
+        ...(modelSwitchAvailable ? [{ icon: <Blocks size={22} strokeWidth={1.5} />, label: "切换模型", onClick: onSwitchModel, disabled: modelSwitchDisabled }] : []),
         { icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--c-text)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></svg>, label: "照片墙", onClick: () => onOpenRichModal("photo") },
         { icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--c-text)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="7" y1="8" x2="17" y2="8" /><line x1="7" y1="12" x2="14" y2="12" /><line x1="7" y1="16" x2="11" y2="16" /></svg>, label: "文字图片", onClick: () => onOpenRichModal("text_photo") },
         { icon: <AlertCircle size={22} strokeWidth={1.5} color="var(--c-text)" />, label: "系统指令", onClick: () => onOpenRichModal("system_instruction") },
@@ -834,7 +843,7 @@ const ChatTextInputBar = memo(forwardRef<ChatTextInputHandle, {
                 <button onClick={onToggleStickerPanel} disabled={inputLocked} className="ui-bare-btn text-[var(--c-text)]" style={inputLocked ? { opacity: 0.35 } : undefined}>
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z" /><polyline points="14 3 14 8 21 8" /><path d="M8 13h0" /><path d="M16 13h0" /><path d="M10 17c.5.3 1.2.5 2 .5s1.5-.2 2-.5" /></svg>
                 </button>
-                <button onClick={onTogglePlusMenu} disabled={inputLocked} className="ui-bare-btn text-[var(--c-text)]" style={inputLocked ? { opacity: 0.35 } : undefined}>
+                <button aria-label="更多功能" onClick={onTogglePlusMenu} disabled={inputLocked} className="ui-bare-btn text-[var(--c-text)]" style={inputLocked ? { opacity: 0.35 } : undefined}>
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="16" /><line x1="8" y1="12" x2="16" y2="12" /></svg>
                 </button>
                 <button
@@ -883,12 +892,15 @@ const ChatTextInputBar = memo(forwardRef<ChatTextInputHandle, {
             {showPlusMenu && (
                 <div className="chat-plus-menu">
                     {plusMenuItems.map((item, i) => (
-                        <div key={`${item.label}-${i}`} onClick={item.onClick} className="chat-plus-menu-item flex flex-col items-center gap-1.5 cursor-pointer" {...(item.active ? { "data-active": "" } : {})}>
+                        <button type="button" key={`${item.label}-${i}`} onClick={item.onClick}
+                            disabled={"disabled" in item && item.disabled === true}
+                            className="ui-bare-btn chat-plus-menu-item flex flex-col items-center gap-1.5 cursor-pointer"
+                            {...("active" in item && item.active ? { "data-active": "" } : {})}>
                             <div className="chat-plus-icon-box">
                                 {item.icon}
                             </div>
                             <span className="ts-11 text-[var(--c-text)]">{item.label}</span>
-                        </div>
+                        </button>
                     ))}
                 </div>
             )}
@@ -1118,6 +1130,8 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
     const [imageGenerationFailure, setImageGenerationFailure] = useState<string | null>(null);
     const [cloudDeletePending, setCloudDeletePending] = useState<{ count: number } | null>(null);
     const [showPlusMenu, setShowPlusMenu] = useState(false);
+    const [showModelSwitch, setShowModelSwitch] = useState(false);
+    const [onlineTextRevision, setOnlineTextRevision] = useState(0);
     const [customPlusActions, setCustomPlusActions] = useState<RegisteredCustomAppChatPlusAction[]>(() => loadCustomAppChatPlusActions());
     const [activeCustomChatPlus, setActiveCustomChatPlus] = useState<ActiveCustomChatPlus | null>(null);
     const [showSettings, setShowSettings] = useState(false);
@@ -1333,6 +1347,43 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
     const scrollRef = useRef<HTMLDivElement>(null);
     const mountedRef = useRef(true);
     const isGeneratingRef = useRef(false);
+    const ordinaryOnlineText = !session.isGroup && !offlineMode && !theaterMode && !showVoiceCall && !showVideoCall;
+    const onlineTextMissing = useMemo(() => {
+        const selection = loadBindingConfig().characterBindings.find(binding => binding.characterId === session.contactId)?.onlineText;
+        return Boolean(selection && !loadApiConfigs().some(config => config.id === selection.apiConfigId));
+    }, [session.contactId, onlineTextRevision]);
+    const modelSwitchDisabled = isGenerating || isOnlineTextBusy(session.contactId) || isBackgroundReplyGenerating(session.id);
+    const canSwitchModel = () => ordinaryOnlineText && !isGeneratingRef.current && !isGenerating
+        && !activeGenerationRuns.has(session.id) && !hasActiveGenerationLock(session.id)
+        && !isOnlineTextBusy(session.contactId) && !isBackgroundReplyGenerating(session.id);
+    const openModelSwitch = () => {
+        if (!canSwitchModel()) return;
+        setShowPlusMenu(false);
+        setShowEmojiPanel(false);
+        setShowStickerPanel(false);
+        setShowModelSwitch(true);
+    };
+    useEffect(() => {
+        const refresh = () => {
+            const selection = loadBindingConfig().characterBindings.find(binding => binding.characterId === session.contactId)?.onlineText;
+            if (ordinaryOnlineText && selection && !loadApiConfigs().some(config => config.id === selection.apiConfigId)) {
+                activeGenerationRuns.get(session.id)?.controller.abort();
+                cancelBackgroundGeneration(session.id);
+            }
+            setOnlineTextRevision(value => value + 1);
+        };
+        window.addEventListener("settings-api-configs-updated", refresh);
+        window.addEventListener("settings-bindings-updated", refresh);
+        window.addEventListener(ONLINE_TEXT_STATE_UPDATED, refresh);
+        window.addEventListener("focus", refresh);
+        return () => {
+            window.removeEventListener("settings-api-configs-updated", refresh);
+            window.removeEventListener("settings-bindings-updated", refresh);
+            window.removeEventListener(ONLINE_TEXT_STATE_UPDATED, refresh);
+            window.removeEventListener("focus", refresh);
+        };
+    }, [session.id, session.contactId, ordinaryOnlineText]);
+    useEffect(() => { setShowModelSwitch(false); }, [session.id, offlineMode, theaterMode, showVoiceCall, showVideoCall]);
     const visibleMessagesRef = useRef<ChatMessage[]>([]);
     const hasMoreRef = useRef(false);
     const offlineGenerationInputRef = useRef("");
@@ -3204,6 +3255,10 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
         errorPrefix = "发送失败",
         onDecline,
     }: ManagedGenerationOptions) => {
+        if (ordinaryOnlineText && onlineTextMissing) {
+            showChatToast(ONLINE_TEXT_API_MISSING_MESSAGE);
+            return;
+        }
         if (isGeneratingRef.current) {
             if (activeGenerationRuns.has(session.id)) return;
             // 上一轮被外部取消/顶替后收尾提前返回过，标记已是陈旧状态：复位后继续本次请求
@@ -3307,6 +3362,10 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
             }
         } catch (error: any) {
             if (!isCurrentGeneration() || isAbortLikeError(error)) return;
+            if (error instanceof OnlineTextApiUnavailableError || error instanceof OnlineTextBusyError) {
+                showChatToast(error.message);
+                return;
+            }
             const errorMsg = pushChatMessage({
                 sessionId: session.id,
                 role: "system",
@@ -3551,6 +3610,10 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
     };
 
     const triggerAIResponse = async () => {
+        if (ordinaryOnlineText && onlineTextMissing) {
+            showChatToast(ONLINE_TEXT_API_MISSING_MESSAGE);
+            return;
+        }
         if (isGeneratingRef.current) {
             if (activeGenerationRuns.has(session.id)) return;
             // 上一轮被外部取消/顶替后收尾提前返回过，标记已是陈旧状态：复位后继续本次请求
@@ -3851,6 +3914,10 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
             }
         } catch (error: any) {
             if (!isCurrentGeneration() || isAbortLikeError(error)) return;
+            if (error instanceof OnlineTextApiUnavailableError || error instanceof OnlineTextBusyError) {
+                showChatToast(error.message);
+                return;
+            }
             const errorMsg = pushChatMessage({
                 sessionId: session.id,
                 role: "system",
@@ -6208,6 +6275,16 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                     </button>
                 </div>
             )}
+            {ordinaryOnlineText && onlineTextMissing && (
+                <div className="chat-model-switch-missing" role="alert">
+                    <span>{ONLINE_TEXT_API_MISSING_MESSAGE}</span>
+                    <button className="ui-bare-btn" disabled={modelSwitchDisabled} onClick={openModelSwitch}>重新选择</button>
+                </div>
+            )}
+            {showModelSwitch && ordinaryOnlineText && (
+                <ModelSwitchDialog key={session.contactId} characterId={session.contactId}
+                    generating={modelSwitchDisabled} canSwitch={canSwitchModel} onClose={() => setShowModelSwitch(false)} />
+            )}
             {!isMultiSelectMode && (offlineMode ? (
                 <OfflineTextInputBar
                     key={session.id}
@@ -6239,6 +6316,9 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                 showStickerPanel={showStickerPanel}
                 showPlusMenu={showPlusMenu}
                 customPlusActions={customPlusActions}
+                modelSwitchDisabled={modelSwitchDisabled}
+                modelSwitchAvailable={ordinaryOnlineText}
+                onSwitchModel={openModelSwitch}
                 onClearQuote={() => setQuotingMessage(null)}
                 onToggleOfflineMode={toggleOfflineMode}
                 onClosePanels={() => { setShowEmojiPanel(false); setShowStickerPanel(false); setShowPlusMenu(false); }}
