@@ -2,6 +2,7 @@
 
 import type { VoiceApiConfig, ContentAppId } from "./settings-types";
 import { loadVoiceConfigs, loadBindingConfig, resolveBinding } from "./settings-storage";
+import { synthesizeElevenLabs } from "./elevenlabs-tts";
 
 export type VoiceApiConfigResolved = VoiceApiConfig;
 
@@ -25,6 +26,7 @@ export function resolveVoiceConfig(characterId: string, appId?: ContentAppId): V
  * Supported providers:
  * - Minimax: REST API → hex-encoded mp3
  * - OpenAI: REST API → binary audio blob
+ * - ElevenLabs: REST API → binary MP3
  */
 export async function synthesizeSpeech(
     text: string,
@@ -34,6 +36,10 @@ export async function synthesizeSpeech(
     if (!text.trim()) return null;
 
     const provider = voiceConfig.provider;
+
+    if (provider === "ElevenLabs") {
+        return synthesizeElevenLabs(text, voiceConfig);
+    }
 
     if (provider === "Minimax") {
         return synthesizeMinimax(text, voiceConfig, options?.emotion);
