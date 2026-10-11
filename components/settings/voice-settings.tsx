@@ -731,7 +731,7 @@ export function VoiceSettings() {
                                                 {isElevenLabsV4(config.model) ? <>
                                                     {([ ["stability", "稳定性", .5], ["similarity", "相似度", .75] ] as const).map(([key, label, fallback]) => <label className="flex flex-col gap-1" key={key}>
                                                         <span className="menu-desc">{label}：{Math.round((config.elevenLabs?.[key] ?? fallback) * 100)}%</span>
-                                                        <input aria-label={`v4 ${label}`} type="range" min="0" max="1" step="0.05" value={config.elevenLabs?.[key] ?? fallback} onChange={e => updateConfig(config.id, { elevenLabs: { ...config.elevenLabs, [key]: Number(e.target.value) } })} />
+                                                        <input aria-label={`v4 ${label}`} className="accent-black" type="range" min="0" max="1" step="0.05" value={config.elevenLabs?.[key] ?? fallback} onChange={e => updateConfig(config.id, { elevenLabs: { ...config.elevenLabs, [key]: Number(e.target.value) } })} />
                                                     </label>)}
                                                     <label className="flex flex-col gap-1"><span className="menu-desc">语言代码 · Language code</span>
                                                         <Input aria-label="v4 语言代码" value={config.elevenLabs?.languageCode || ""} maxLength={2} onChange={e => updateConfig(config.id, { elevenLabs: { ...config.elevenLabs, languageCode: e.target.value.trim().toLowerCase() } })} placeholder="自动识别（留空）" />
@@ -742,9 +742,9 @@ export function VoiceSettings() {
                                                         ["stability", "稳定性", .5], ["similarity", "相似度", .75], ["style", "风格强度", 0],
                                                     ] as const).map(([key, label, fallback]) => <label className="flex flex-col gap-1" key={key}>
                                                         <span className="menu-desc">{label}：{Math.round((config.elevenLabs?.[key] ?? fallback) * 100)}%</span>
-                                                        <input type="range" min="0" max="1" step="0.05" value={config.elevenLabs?.[key] ?? fallback} onChange={e => updateConfig(config.id, { elevenLabs: { ...config.elevenLabs, [key]: Number(e.target.value) } })} />
+                                                        <input className="accent-black" type="range" min="0" max="1" step="0.05" value={config.elevenLabs?.[key] ?? fallback} onChange={e => updateConfig(config.id, { elevenLabs: { ...config.elevenLabs, [key]: Number(e.target.value) } })} />
                                                     </label>)}
-                                                    <label className="flex flex-col gap-1"><span className="menu-desc">语速：{(config.speechSpeed ?? 1).toFixed(2)}×</span><input type="range" min="0.7" max="1.2" step="0.05" value={config.speechSpeed ?? 1} onChange={e => updateConfig(config.id, { speechSpeed: Number(e.target.value) })} /></label>
+                                                    <label className="flex flex-col gap-1"><span className="menu-desc">语速：{(config.speechSpeed ?? 1).toFixed(2)}×</span><input className="accent-black" type="range" min="0.7" max="1.2" step="0.05" value={config.speechSpeed ?? 1} onChange={e => updateConfig(config.id, { speechSpeed: Number(e.target.value) })} /></label>
                                                     <div className="ui-toggle-row"><span className="menu-label">音色增强</span><Toggle checked={config.elevenLabs?.speakerBoost ?? true} onChange={value => updateConfig(config.id, { elevenLabs: { ...config.elevenLabs, speakerBoost: value } })} /></div>
                                                 </>}
                                                 <span className="menu-desc">用于试听、聊天语音及通话发声。已有克隆音色可同步或手填 ID；语音识别仍使用原识别配置。</span>
