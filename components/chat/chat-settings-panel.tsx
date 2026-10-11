@@ -419,6 +419,7 @@ export function ChatSettingsPanel({
     const [editingBilingualPrompt, setEditingBilingualPrompt] = useState(false);
     const [editingCSS, setEditingCSS] = useState(false);
     const [showScreenEffects, setShowScreenEffects] = useState(false);
+    const [showChatSounds, setShowChatSounds] = useState(false);
     const [showSearch, setShowSearch] = useState(false);
     // TA 的电脑：翻看角色云端电脑（连接了角色电脑才显示入口）
     const [showComputer, setShowComputer] = useState(false);
@@ -1154,15 +1155,15 @@ export function ChatSettingsPanel({
                     </>
                 </div>
 
-                {!session.isGroup && (
-                    <>
-                        <div className="px-4 pt-3 pb-2 ts-12 font-medium text-[var(--c-text-title)] opacity-80">角色专属提示音</div>
-                        <SessionChatSoundsSection session={session} accent={BINDING_ACCENTS.voice} onUpdate={updateSession} />
-                    </>
-                )}
-
                 {/* Backgrounds & UI */}
                 <div className="menu-group">
+                    {!session.isGroup && (
+                        <button className="menu-item" onClick={() => setShowChatSounds(true)}>
+                            <ChatInfoIcon icon={FolderOpen} color={BINDING_ACCENTS.voice} />
+                            <div className="menu-label-group"><span className="menu-label">角色专属提示音</span></div>
+                            <div className="menu-right"><ChevronRight size={16} /></div>
+                        </button>
+                    )}
                     <label className="menu-item">
                         <ChatInfoIcon icon={ImageIcon} color={BINDING_ACCENTS.api} />
                         <div className="menu-label-group"><span className="menu-label">聊天背景</span></div>
@@ -1480,6 +1481,24 @@ export function ChatSettingsPanel({
 
             {/* Modal: Screen Effects */}
             {showScreenEffects && <ScreenEffectSettingsModal onClose={() => setShowScreenEffects(false)} />}
+
+            {showChatSounds && !session.isGroup && (
+                <div className="modal-overlay modal-overlay-bottom" onClick={() => setShowChatSounds(false)}>
+                    <div className="modal-sheet screen-fx-sheet" role="dialog" aria-modal="true" aria-labelledby="session-chat-sounds-title" onClick={e => e.stopPropagation()}>
+                        <span className="screen-fx-grabber" aria-hidden="true" />
+                        <div className="screen-fx-titles">
+                            <h2 className="screen-fx-title" id="session-chat-sounds-title">角色专属提示音</h2>
+                            <p className="screen-fx-subtitle">设置当前角色的新消息、发送消息与通话音效</p>
+                        </div>
+                        <div className="screen-fx-list">
+                            <SessionChatSoundsSection session={session} accent={BINDING_ACCENTS.voice} onUpdate={updateSession} />
+                        </div>
+                        <div className="screen-fx-footer">
+                            <button className="screen-fx-cta" onClick={() => setShowChatSounds(false)}>完成</button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Modal: Confirm Clear History */}
             {showConfirmClear && (
