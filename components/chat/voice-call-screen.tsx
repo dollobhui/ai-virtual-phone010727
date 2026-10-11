@@ -1,5 +1,7 @@
 "use client";
 
+import { useCallScreenSounds } from "@/lib/chat-sound";
+
 import { useState, useRef, useEffect, useCallback } from "react";
 import { ChatSession, ChatMessage, loadChatMessages, pushChatMessage, getLatestCharacterStateValues } from "@/lib/chat-storage";
 import { getStatusRegionConfig, isCustomStatusRegionActive } from "@/lib/chat-status-region";
@@ -103,6 +105,7 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
 
     // Keep refs in sync
     useEffect(() => { stateRef.current = callState; }, [callState]);
+    useCallScreenSounds({ initiator, callState, session });
     useEffect(() => { minimizedRef.current = minimized; }, [minimized]);
 
     // 缩小为悬浮窗：冻结通话——停止监听、打断在播放的语音

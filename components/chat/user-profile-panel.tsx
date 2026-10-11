@@ -15,6 +15,7 @@ import type { FollowUpConfig } from "@/lib/settings-storage";
 import { PageShell } from "@/components/ui/page-shell";
 import { CHAT_APP_CSS_EXAMPLE } from "@/lib/css-examples";
 import { Toggle } from "@/components/ui/form";
+import { GlobalChatSoundsSettings } from "./global-chat-sounds";
 import { StickerManager } from "./sticker-manager";
 import { ChatPluginManager } from "./chat-plugin-manager";
 import { ChatPluginPageBoundary } from "./chat-plugin-page-boundary";
@@ -149,6 +150,7 @@ function isBrowserNotificationGranted(): boolean {
    Main export
    ══════════════════════════════════════════ */
 export function UserProfilePanel({ onClose, className }: UserProfilePanelProps) {
+    const [showSoundsSettings, setShowSoundsSettings] = useState(false);
     const [showFollowUpEditor, setShowFollowUpEditor] = useState(false);
     const [showApiLog, setShowApiLog] = useState(false);
     const [showStickerManager, setShowStickerManager] = useState(false);
@@ -263,6 +265,9 @@ export function UserProfilePanel({ onClose, className }: UserProfilePanelProps) 
                 <ChatPluginManager onBack={() => { window.dispatchEvent(new CustomEvent("chat-hide-tabbar", { detail: false })); setShowPluginManager(false); }} />
             </ChatPluginPageBoundary>
         );
+    }
+    if (showSoundsSettings) {
+        return <GlobalChatSoundsSettings onBack={() => { window.dispatchEvent(new CustomEvent("chat-hide-tabbar", { detail: false })); setShowSoundsSettings(false); }} />;
     }
     if (showApiLog) {
         return <ApiLogViewer onBack={() => { window.dispatchEvent(new CustomEvent("chat-hide-tabbar", { detail: false })); setShowApiLog(false); }} />;
@@ -421,6 +426,17 @@ export function UserProfilePanel({ onClose, className }: UserProfilePanelProps) 
                             <div className="flex flex-col flex-1 text-left gap-0.5">
                                 <span className="ts-14 font-semibold text-[var(--c-text-title)]">离线推送与定时消息</span>
                                 <span className="ts-11 text-[var(--c-text)] opacity-70">关掉后台也能收到推送、安静时段、定时主动消息</span>
+                            </div>
+                            <ChevronRight size={16} className="text-[var(--c-icon)] opacity-50" />
+                        </button>
+                    </div>
+
+                    <div className="mx-4 mb-4 bg-[var(--c-card)] rounded-2xl px-4 py-1">
+                        <button className="flex items-center gap-3 py-3.5 w-full" onClick={() => { window.dispatchEvent(new CustomEvent("chat-hide-tabbar", { detail: true })); setShowSoundsSettings(true); }}>
+                            <Bell size={18} className="text-[var(--c-icon)] opacity-70" strokeWidth={1.25} />
+                            <div className="flex flex-col flex-1 text-left gap-0.5">
+                                <span className="ts-14 font-semibold text-[var(--c-text-title)]">全局提示音</span>
+                                <span className="ts-11 text-[var(--c-text)] opacity-70">新消息、发送消息、来电、致电与挂断音效</span>
                             </div>
                             <ChevronRight size={16} className="text-[var(--c-icon)] opacity-50" />
                         </button>
