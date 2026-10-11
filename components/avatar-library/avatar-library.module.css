@@ -7,12 +7,13 @@
 .categories button[aria-pressed=true] { background: #fff; box-shadow: 0 2px 6px #00000008; font-weight: 600; }
 .folderGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px 20px; }
 .folderCard { display: flex; flex-direction: column; align-items: stretch; min-width: 0; border: 0; padding: 0; color: inherit; background: transparent; text-align: left; }
-.ticketStack { display: block; position: relative; aspect-ratio: 1 / 1.05; width: 100%; }
-.ticketSheet { position: absolute; inset: 4% 4%; width: 92%; height: 92%; transform-origin: center; filter: drop-shadow(0 2px 2px #00000008); }
-.ticketSheet[data-layer="0"] { transform: translate(1%, 4%) rotate(-1deg); }
-.ticketSheet[data-layer="1"] { transform: translate(-1%, -4%) rotate(-8deg); }
-.ticketSheet[data-layer="2"] { transform: rotate(-5deg); }
-.folderCaption { display: block; text-align: center; padding: 10px 4px 0; font-size: 12px; }
+.ticketStack { display: block; position: relative; aspect-ratio: 1; width: 100%; }
+.ticketArt { position: absolute; top: 0; left: 0; width: 100%; aspect-ratio: 1; }
+.ticketWindow { position: absolute; inset: 0; clip-path: polygon(14% 16.5%, 83% 12%, 87% 77.5%, 17.75% 82%); background: #f7f7f7; }
+.ticketPhoto { position: absolute; left: 14%; top: 12%; width: 73%; height: 70%; object-fit: cover; object-position: center; display: block; }
+.ticketEmpty { position: absolute; inset: 0; display: grid; place-items: center; color: #aaa; font-size: 10px; }
+.ticketFrame { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none; }
+.folderCaption { display: block; text-align: center; padding: 2px 4px 0; font-size: 12px; }
 .folderCaption span { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 
 .notice { margin: 12px 0; font-size: 11px; line-height: 1.6; opacity: .65; overflow-wrap: anywhere; }
