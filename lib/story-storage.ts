@@ -2,6 +2,7 @@ import Dexie from "dexie";
 import { formatChatTimestamp } from "./llm-prompt-assembler";
 
 export type StoryUiPrefs = {
+  voiceEnabled?: boolean;
   hideBubble?: boolean;
   hideAvatar?: boolean;
   hideTimestamp?: boolean;

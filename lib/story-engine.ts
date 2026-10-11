@@ -23,6 +23,11 @@ import { loadStoryMessages, replaceStoryMessages, type StoryMessage } from "./st
 import type { ChatMessage } from "./chat-storage";
 import { MacroEngine } from "./macro-engine";
 
+// Dialogue convention migrated from momo.float.phone; no voice list or emotion tags.
+const STORY_VOICE_FORMAT_PROMPT = `# 剧情对白格式
+「对白」仅包裹角色真正说出口的人声；每次说话分别包裹，不要在括号内重复角色名。
+无论用户或历史消息里的对话使用什么标点形式，你输出的角色对白一律使用「」。
+旁白、动作以及用户的话不得写进「」；不要解释这些格式，也不要输出额外的语音清单。`;
 const DEFAULT_STORY_FOLD_TAGS = "think,thinking,summary";
 const DEFAULT_STORY_CONTEXT_EXCLUDED_TAGS = "think,thinking";
 
@@ -201,7 +206,7 @@ async function buildStoryPromptMessages(
 
   const now = new Date();
 
-  return assemblePromptPayload({
+  const messages = assemblePromptPayload({
     character,
     history: truncatedHistory,
     preset,
@@ -217,6 +222,8 @@ async function buildStoryPromptMessages(
     recentBlocks,
     unifiedRecentItems,
   });
+  messages.push({ role: "system", content: STORY_VOICE_FORMAT_PROMPT });
+  return messages;
 }
 
 export async function previewStoryPromptPayload(
