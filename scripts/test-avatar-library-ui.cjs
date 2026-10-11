@@ -43,42 +43,75 @@ const image = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="180" h
             const get=key=>new Promise((resolve,reject)=>{const req=db.transaction('entries').objectStore('entries').get(key);req.onsuccess=()=>resolve(req.result ? JSON.parse(req.result.value):null);req.onerror=()=>reject(req.error)});
             const library=await get('ai_phone_avatar_library_v1'),characters=await get('ai_phone_characters_v1');db.close();return {library,characters};
         });
-        const add = async text=>{ await page.getByRole('button',{name:'添加 URL',exact:true}).click(); await page.getByRole('textbox',{name:'每行一个 URL，或 描述：URL'}).fill(text); await page.getByRole('button',{name:'保存',exact:true}).click(); await page.getByRole('dialog').waitFor({state:'hidden'}); };
-        const resources=async()=>{await page.getByRole('button',{name:'测试：资源库',exact:true}).click();await page.getByRole('button',{name:'添加 URL',exact:true}).waitFor();};
-        const share=async(name,index=0)=>{await page.getByRole('button',{name:'分享给 TA 换上',exact:true}).nth(index).click();await page.getByRole('combobox',{name:'角色',exact:true}).selectOption({label:name});await page.getByRole('button',{name:'发送推荐',exact:true}).click();await page.getByTitle('触发 AI 主动回复',{exact:true}).waitFor();};
+        const homeMenu=async()=>page.getByRole('button',{name:'头像库更多',exact:true}).click();
+        const folderMenu=async()=>page.getByRole('button',{name:'文件夹更多',exact:true}).click();
+        const openDefault=async()=>{await page.getByRole('button',{name:/打开文件夹：未分类/}).click();await page.getByRole('dialog',{name:'文件夹内容'}).waitFor();};
+        const closeFolder=async()=>page.getByRole('button',{name:'关闭文件夹',exact:true}).click();
+        const add=async text=>{await folderMenu();await page.getByRole('button',{name:'添加头像',exact:true}).click();await page.getByRole('textbox',{name:'每行一个 URL，或 描述：URL'}).fill(text);await page.getByRole('button',{name:'保存',exact:true}).click();await page.getByRole('dialog',{name:'添加 / 批量导入 URL'}).waitFor({state:'hidden'});};
+        const resources=async()=>{await page.getByRole('button',{name:'测试：资源库',exact:true}).click();await openDefault();};
+        const share=async(name,index=0)=>{await page.getByRole('button',{name:/查看头像：/}).nth(index).click();await page.getByRole('button',{name:'分享给 TA 换上',exact:true}).click();await page.getByRole('combobox',{name:'角色',exact:true}).selectOption({label:name});await page.getByRole('button',{name:'发送推荐',exact:true}).click();await page.getByTitle('触发 AI 主动回复',{exact:true}).waitFor();};
         await page.goto(baseUrl+'/avatar-test',{waitUntil:'networkidle',timeout:120000});
-        await page.getByRole('button',{name:'添加 URL',exact:true}).waitFor();
-        await check('URL add and batch with descriptions',async()=>{
-            await add('黑色西装头像：https://avatars.test/a.png');
+        await page.getByRole('button',{name:/打开文件夹：未分类/}).waitFor();
+        await check('clean home, batch URLs and image details',async()=>{
+            assert.equal(await page.getByText('用图片 URL 收藏头像，分享给角色，由 TA 决定是否换上。').count(),0);
+            assert.equal(await page.getByRole('button',{name:'新建文件夹',exact:true}).count(),0);
+            await openDefault();await add('黑色西装头像：https://avatars.test/a.png');
             await add('https://avatars.test/b.png\n情侣之一：https://avatars.test/c.png\nhttps://avatars.test/b.png');
-            assert.equal((await state()).library.images.length,3); assert.equal(await page.locator('article').count(),3);
+            assert.equal((await state()).library.images.length,3);
+            assert.equal(await page.getByRole('button',{name:/查看头像：/}).count(),3);
+            await page.getByRole('button',{name:/查看头像：/}).first().click();await page.getByRole('dialog',{name:'头像详情'}).waitFor();
+            assert.equal(await page.getByRole('button',{name:'分享给 TA 换上',exact:true}).count(),1);
+            await page.getByRole('button',{name:'关闭头像详情'}).click();await closeFolder();
         });
-        await check('folders create/rename/move/delete without losing images',async()=>{
-            await page.getByRole('button',{name:'新建文件夹',exact:true}).click();await page.getByRole('textbox',{name:'文件夹名称'}).fill('收藏');await page.getByRole('button',{name:'保存',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
-            await page.getByRole('button',{name:'移动',exact:true}).first().click();await page.getByRole('combobox',{name:'目标文件夹'}).selectOption({label:'收藏'});await page.getByRole('button',{name:'保存',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
-            await page.getByRole('combobox',{name:'当前文件夹'}).selectOption({label:'收藏'});assert.equal(await page.locator('article').count(),1);
-            await page.getByRole('button',{name:'重命名',exact:true}).click();await page.getByRole('textbox',{name:'文件夹名称'}).fill('西装');await page.getByRole('button',{name:'保存',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
-            await page.getByRole('button',{name:'删除文件夹',exact:true}).click();await page.getByRole('status').filter({hasText:'文件夹已删除'}).waitFor();assert.equal(await page.locator('article').count(),3);
+        await check('ticket folders and multi-select move',async()=>{
+            await homeMenu();await page.getByRole('button',{name:'新建文件夹',exact:true}).click();
+            await page.getByRole('textbox',{name:'文件夹名称'}).fill('收藏');await page.getByRole('button',{name:'保存',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
+            await openDefault();await folderMenu();await page.getByRole('button',{name:'多选',exact:true}).click();
+            await page.getByRole('button',{name:/查看头像：/}).nth(1).click();await page.getByRole('button',{name:/查看头像：/}).nth(2).click();
+            await folderMenu();await page.getByRole('button',{name:'移动所选',exact:true}).click();
+            await page.getByRole('combobox',{name:'目标文件夹'}).selectOption({label:'收藏'});await page.getByRole('button',{name:'保存',exact:true}).click();await page.getByRole('dialog',{name:'移动图片'}).waitFor({state:'hidden'});
+            assert.equal((await state()).library.images.filter(x=>x.folderId).length,2);await closeFolder();
+            await page.getByRole('button',{name:/打开文件夹：收藏/}).click();await folderMenu();await page.getByRole('button',{name:'重命名',exact:true}).click();
+            await page.getByRole('textbox',{name:'文件夹名称'}).fill('年上');await page.getByRole('button',{name:'保存',exact:true}).click();await page.getByRole('dialog',{name:'重命名文件夹'}).waitFor({state:'hidden'});
+            assert.equal((await state()).library.folders[0].name,'年上');
+            if(process.env.AVATAR_FOLDER_SCREENSHOT) await page.locator(".phone-app-pane").screenshot({path:process.env.AVATAR_FOLDER_SCREENSHOT,fullPage:true,animations:"disabled"});
+            await closeFolder();
+            if(process.env.AVATAR_HOME_SCREENSHOT) await page.locator(".phone-app-pane").screenshot({path:process.env.AVATAR_HOME_SCREENSHOT,animations:"disabled"});
+            await page.getByRole('button',{name:/打开文件夹：年上/}).click();
+            await folderMenu();await page.getByRole('button',{name:'删除文件夹',exact:true}).click();await page.getByRole('dialog',{name:'删除文件夹'}).getByRole('button',{name:'删除文件夹',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
+            assert.equal((await state()).library.images.filter(x=>x.folderId).length,0);
         });
-        await check('edit description and recycle restore',async()=>{
-            await page.getByRole('button',{name:'描述',exact:true}).first().click();await page.getByRole('textbox',{name:'图片描述'}).fill('换头像用的黑色西装');await page.getByRole('button',{name:'保存',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
-            await page.getByRole('button',{name:'删除',exact:true}).first().click();await page.getByRole('status').filter({hasText:'已移入回收站'}).waitFor();await page.getByRole('button',{name:'回收站',exact:true}).click();assert.equal(await page.locator('article').count(),1);
-            await page.getByRole('button',{name:'恢复',exact:true}).click();await page.getByRole('status').filter({hasText:'图片已恢复'}).waitFor();await page.getByRole('button',{name:'返回头像库',exact:true}).click();assert.equal(await page.locator('article').count(),3);
+        await check('batch trash and restoration',async()=>{
+            await openDefault();await folderMenu();await page.getByRole('button',{name:'多选',exact:true}).click();await page.getByRole('button',{name:'全选',exact:true}).click();
+            await folderMenu();await page.getByRole('button',{name:'删除所选',exact:true}).click();
+            await page.getByText('这个文件夹还没有头像',{exact:true}).waitFor();await closeFolder();await homeMenu();await page.getByRole('button',{name:'回收站',exact:true}).click();
+            for(let i=0;i<3;i++){await page.getByRole('button',{name:/查看头像：/}).first().click();await page.getByRole('button',{name:/查看头像：/}).count();}
+            await page.getByText('回收站为空',{exact:true}).waitFor();await closeFolder();
         });
-        await check('JSON export/import merge, duplicates and invalid payload rejection',async()=>{
-            const download=page.waitForEvent('download');await page.getByRole('button',{name:'导出 JSON',exact:true}).click();const file=await download;const text=fs.readFileSync(await file.path(),'utf8');assert.equal(JSON.parse(text).images.length,3);
-            await page.getByLabel('导入头像库 JSON').setInputFiles({name:'backup.json',mimeType:'application/json',buffer:Buffer.from(text)});await page.getByRole('status').filter({hasText:'新增 0 张'}).waitFor();
-            await page.getByLabel('导入头像库 JSON').setInputFiles({name:'invalid.json',mimeType:'application/json',buffer:Buffer.from('{}')});await page.getByRole('status').filter({hasText:'格式或版本不正确'}).waitFor();assert.equal((await state()).library.images.length,3);
+        await check('JSON merge and refresh persistence',async()=>{
+            await homeMenu();const download=page.waitForEvent('download');await page.getByRole('button',{name:'导出数据',exact:true}).click();
+            const file=await download;const text=fs.readFileSync(await file.path(),'utf8');assert.equal(JSON.parse(text).images.length,3);
+            await page.getByLabel('导入头像库 JSON').setInputFiles({name:'backup.json',mimeType:'application/json',buffer:Buffer.from(text)});
+            await page.getByRole('status').filter({hasText:'新增 0 张'}).waitFor();
+            await page.reload({waitUntil:'networkidle'});await openDefault();assert.equal(await page.getByRole('button',{name:/查看头像：/}).count(),3);
         });
-        await check('browser reload preserves avatar library',async()=>{await page.reload({waitUntil:'networkidle'});await page.getByRole('button',{name:'分享给 TA 换上',exact:true}).first().waitFor();assert.equal(await page.locator('article').count(),3);});
+        await check('320px layout and keyboard close',async()=>{
+            await page.setViewportSize({width:320,height:800});
+            assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=320));
+            await page.getByRole('button',{name:/查看头像：/}).first().click();
+            await page.keyboard.press('Escape');await page.getByRole('dialog',{name:'文件夹内容'}).waitFor();
+            await closeFolder();await page.setViewportSize({width:440,height:900});
+
+            await openDefault();
+        });
         await check('share → existing chat → generated acceptance → live and historical avatars',async()=>{
             await share('小爱');await page.getByTitle('触发 AI 主动回复',{exact:true}).click();await page.locator('.chat-sys-msg').filter({hasText:'小爱更换了头像'}).waitFor({timeout:30000});
             assert.equal((await state()).characters.find(x=>x.id==='alice').avatar,'https://avatars.test/a.png');
-            assert.ok(requests.length); assert.match(JSON.stringify(requests.at(-1).messages),/换头像用的黑色西装/);
+            assert.ok(requests.length); assert.match(JSON.stringify(requests.at(-1).messages),/黑色西装头像/);
             assert.ok(await page.locator('.chat-msg-avatar img[src="https://avatars.test/a.png"]').count()>=2);
             assert.equal(await page.getByText('好呀，我这就换上。',{exact:true}).count(),1);
             assert.equal(await page.getByText('[接受头像推荐]',{exact:true}).count(),0);
-            const screenshot=process.env.AVATAR_SCREENSHOT; if(screenshot) await page.screenshot({path:screenshot,fullPage:true});
+            const screenshot=process.env.AVATAR_SCREENSHOT; if(screenshot) await page.screenshot({path:screenshot,fullPage:true,animations:"disabled"});
         });
         await check('chat list reflects updated avatar and stays correct after reload',async()=>{
             await page.getByRole('button',{name:'测试：聊天列表',exact:true}).click();await page.locator('img[src="https://avatars.test/a.png"]').first().waitFor();await page.reload({waitUntil:'networkidle'});assert.equal((await state()).characters.find(x=>x.id==='alice').avatar,'https://avatars.test/a.png');
@@ -90,7 +123,7 @@ const image = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="180" h
             await page.getByRole('button',{name:'测试：普通图片',exact:true}).click();await page.getByTitle('触发 AI 主动回复',{exact:true}).click();await page.locator('.chat-markdown-paragraph').filter({hasText:'普通图片很漂亮。'}).waitFor({timeout:30000});assert.equal((await state()).characters.find(x=>x.id==='bob').avatar,'https://avatars.test/old.png');
         });
         await check('streamed acceptance follows the same persistence and avatar update mechanism',async()=>{
-            mode='accepted';await page.getByRole('button',{name:'测试：下次流式回复',exact:true}).click();await share('小白',1);await page.getByTitle('触发 AI 主动回复',{exact:true}).click();await page.locator('.chat-sys-msg').filter({hasText:'小白更换了头像'}).waitFor({timeout:30000});assert.equal((await state()).characters.find(x=>x.id==='bob').avatar,'https://avatars.test/b.png');assert.equal(requests.at(-1).stream,true);
+            mode='accepted';await page.getByRole('button',{name:'测试：下次流式回复',exact:true}).click();await openDefault();await share('小白',1);await page.getByTitle('触发 AI 主动回复',{exact:true}).click();await page.locator('.chat-sys-msg').filter({hasText:'小白更换了头像'}).waitFor({timeout:30000});assert.equal((await state()).characters.find(x=>x.id==='bob').avatar,'https://avatars.test/b.png');assert.equal(requests.at(-1).stream,true);
         });
         await check('marker-only model reply still resolves without a visible control-tag bubble',async()=>{
             mode='markerOnly';await resources();await share('小爱',1);await page.getByTitle('触发 AI 主动回复',{exact:true}).click();await page.locator('.chat-sys-msg').filter({hasText:'小爱更换了头像'}).nth(1).waitFor({timeout:30000});assert.equal((await state()).characters.find(x=>x.id==='alice').avatar,'https://avatars.test/b.png');

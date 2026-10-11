@@ -14,7 +14,7 @@ export type ResourceSubPage = "main" | "memory" | "vn_assets" | "avatars";
 type MemoryView = "list" | "detail" | "settings";
 
 const RESOURCE_MENU: Omit<FeaturedCardItem, "onClick">[] = [
-    { id: "avatars", icon: Image, label: "头像库", desc: "URL 收藏与头像推荐", iconColor: BINDING_ACCENTS.memory },
+    { id: "avatars", icon: Image, label: "头像库", desc: "头像档案", iconColor: BINDING_ACCENTS.memory, glassIcon: "image-generation" },
     {
         id: "memory",
         icon: Brain,
@@ -35,6 +35,7 @@ const RESOURCE_MENU: Omit<FeaturedCardItem, "onClick">[] = [
 
 export function PhoneResourcesApp({ onClose, onNotice, initialPage }: { onClose: () => void; onNotice?: (msg: string) => void; initialPage?: ResourceSubPage }) {
     const [currentPage, setCurrentPage] = useState<ResourceSubPage>(initialPage ?? "main");
+    const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
     const [memoryView, setMemoryView] = useState<MemoryView>("list");
     const [prevMemoryView, setPrevMemoryView] = useState<MemoryView>("list");
     const [memoryCharId, setMemoryCharId] = useState<string>("");
@@ -45,6 +46,7 @@ export function PhoneResourcesApp({ onClose, onNotice, initialPage }: { onClose:
     }, [initialPage]);
 
     const handleBack = () => {
+        setAvatarMenuOpen(false);
         if (currentPage === "memory") {
             if (memoryView === "settings") {
                 setMemoryView(prevMemoryView);
@@ -89,7 +91,7 @@ export function PhoneResourcesApp({ onClose, onNotice, initialPage }: { onClose:
             title={title}
             onBack={handleBack}
             className={currentPage === "memory" && memoryView === "detail" ? "mem-detail" : undefined}
-            rightAction={showSettingsIcon ? (
+            rightAction={currentPage === "avatars" ? <button type="button" className="page-back-btn" aria-label="头像库更多" aria-expanded={avatarMenuOpen} onClick={() => setAvatarMenuOpen(x => !x)}><MoreHorizontal size={22} strokeWidth={1.5} /></button> : showSettingsIcon ? (
                 <button
                     onClick={() => { setPrevMemoryView(memoryView); setMemoryView("settings"); }}
                     className="page-back-btn"
@@ -125,7 +127,7 @@ export function PhoneResourcesApp({ onClose, onNotice, initialPage }: { onClose:
                     </div>
                 )}
 
-                {currentPage === "avatars" && <AvatarLibraryPage />}
+                {currentPage === "avatars" && <AvatarLibraryPage menuOpen={avatarMenuOpen} onMenuClose={() => setAvatarMenuOpen(false)} />}
                 {currentPage === "vn_assets" && (
                     <VnAssetPage onNotice={onNotice} />
                 )}

@@ -29,6 +29,20 @@ const persisted = async () => (await db.table('entries').get(model.AVATAR_LIBRAR
 const act = store.updateAvatarLibrary;
 const add = (text,category='single',folderId=null) => act({ type:'add',text,category,folderId });
 
+test('multi-select operations commit atomically and preserve input on collision', () => {
+    let library = model.applyAvatarLibraryOperation(model.emptyAvatarLibrary(), {type:'add',text:'https://example.com/one.png\nhttps://example.com/two.png',category:'single',folderId:null}).library;
+    library = model.applyAvatarLibraryOperation(library, {type:'add',text:'https://example.com/two.png',category:'couple',folderId:null}).library;
+    const ids = library.images.filter(x=>x.category==='single').map(x=>x.id);
+    const original = JSON.stringify(library);
+    assert.throws(()=>model.applyAvatarLibraryOperation(library,{type:'batch',operations:ids.map(id=>({type:'move',id,category:'couple',folderId:null}))}),/相同 URL/);
+    assert.equal(JSON.stringify(library),original);
+    const deleted = model.applyAvatarLibraryOperation(library,{type:'batch',operations:ids.map(id=>({type:'delete',id}))}).library;
+    assert.equal(deleted.images.filter(x=>x.deletedAt).length,2);
+    const restored = model.applyAvatarLibraryOperation(deleted,{type:'batch',operations:ids.map(id=>({type:'restore',id}))}).library;
+    assert.equal(restored.images.filter(x=>x.deletedAt).length,0);
+    assert.equal(restored.images.length,3);
+});
+
 test('URL avatar library and existing chat integration', async t => {
     await t.test('URL-only and description + URL parsing; binary/unsafe URLs rejected', () => {
         const parsed = model.parseAvatarUrls('https://example.com/a.png\n黑色西装头像：https://example.com/b.png\nEnglish: https://example.com/c.png\n');

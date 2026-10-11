@@ -91,6 +91,7 @@ export function mergeAvatarLibrary(existing: AvatarLibrary, incoming: AvatarLibr
 }
 
 export type AvatarLibraryOperation =
+    | { type: "batch"; operations: AvatarLibraryOperation[] }
     | { type: "add"; text: string; category: AvatarCategory; folderId: string | null }
     | { type: "create-folder"; name: string; category: AvatarCategory }
     | { type: "rename-folder"; id: string; name: string }
@@ -101,6 +102,15 @@ export type AvatarLibraryOperation =
     | { type: "import"; data: AvatarLibrary };
 
 export function applyAvatarLibraryOperation(state: AvatarLibrary, op: AvatarLibraryOperation): { library: AvatarLibrary; added: number; skipped: number } {
+    if (op.type === "batch") {
+        let library = state;
+        let added = 0, skipped = 0;
+        for (const operation of op.operations) {
+            const result = applyAvatarLibraryOperation(library, operation);
+            library = result.library; added += result.added; skipped += result.skipped;
+        }
+        return { library, added, skipped };
+    }
     const library = structuredClone(state);
     const result = { library, added: 0, skipped: 0 };
     if (op.type === "import") return mergeAvatarLibrary(library, parseAvatarLibrary(op.data));

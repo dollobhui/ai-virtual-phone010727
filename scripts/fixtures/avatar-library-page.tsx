@@ -36,7 +36,7 @@ export default function AvatarFixture() {
         })();
         return () => window.removeEventListener("open-app", navigate);
     }, []);
-    return <MusicProvider><div className="phone-shell" style={{ maxWidth: 440, height: "100dvh", margin: "auto", background: "var(--c-page-body-bg)" }}>
+    return <MusicProvider><div className="phone-shell" style={{ width: "100%", maxWidth: 440, height: "100dvh", margin: "auto", background: "var(--c-page-body-bg)" }}>
         <nav><button onClick={() => setApp("resources")}>测试：资源库</button><button onClick={() => { setSessionId(null); setApp("chat"); }}>测试：聊天列表</button>
             <button onClick={() => {
                 if (!sessionId) return;

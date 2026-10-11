@@ -1,0 +1,53 @@
+.page { padding: 20px 22px 32px; position: relative; color: var(--c-text-title, #303236); }
+.page button { font: inherit; cursor: pointer; }
+.page button:disabled { opacity: .4; cursor: default; }
+.page button:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
+.categories { display: grid; grid-template-columns: 1fr 1fr; width: min(240px, 100%); margin: 0 auto 30px; padding: 4px; border-radius: 999px; background: #e9e9ed; }
+.categories button { border: 0; background: transparent; padding: 8px 12px; border-radius: 999px; color: inherit; font-size: 12px; }
+.categories button[aria-pressed=true] { background: #fff; box-shadow: 0 2px 6px #00000008; font-weight: 600; }
+.folderGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px 20px; }
+.folderCard { display: flex; flex-direction: column; align-items: stretch; min-width: 0; border: 0; padding: 0; color: inherit; background: transparent; text-align: left; }
+.ticketStack { display: block; position: relative; aspect-ratio: 1 / 1.05; width: 100%; }
+.ticketSheet { position: absolute; inset: 4% 4%; width: 92%; height: 92%; transform-origin: center; filter: drop-shadow(0 2px 2px #00000008); }
+.ticketSheet[data-layer="0"] { transform: translate(1%, 4%) rotate(-1deg); }
+.ticketSheet[data-layer="1"] { transform: translate(-1%, -4%) rotate(-8deg); }
+.ticketSheet[data-layer="2"] { transform: rotate(-5deg); }
+.folderCaption { display: block; text-align: center; padding: 10px 4px 0; font-size: 12px; }
+.folderCaption span { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+.notice { margin: 12px 0; font-size: 11px; line-height: 1.6; opacity: .65; overflow-wrap: anywhere; }
+.menuBackdrop { position: fixed; inset: 0; border: 0; background: transparent; z-index: 31; }
+.pageMenu, .folderMenu { position: absolute; right: 16px; top: 0; min-width: 156px; padding: 7px; border-radius: 15px; background: var(--c-panel, #fff); box-shadow: 0 8px 32px #00000018; z-index: 32; }
+.pageMenu button, .folderMenu button { display: block; width: 100%; text-align: left; padding: 12px 14px; border: 0; background: transparent; color: inherit; border-radius: 8px; font-size: 13px; }
+.pageMenu button:hover, .folderMenu button:hover { background: #8888880d; }
+.folderDialog, .detailDialog { width: min(350px, calc(100% - 40px)) !important; padding: 22px !important; border-radius: 25px !important; max-height: 78dvh !important; overflow-y: auto; }
+.folderDialog :global(.modal-header), .detailDialog :global(.modal-header) { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 8px; margin-bottom: 12px; }
+.folderDialog :global(.modal-title), .detailDialog :global(.modal-title) { font-size: 17px; text-align: left; min-width: 0; overflow-wrap: anywhere; }
+.folderDialog :global(.modal-footer), .detailDialog :global(.modal-footer) { display: none; }
+.dialogActions { display: flex; gap: 4px; flex-shrink: 0; }
+.iconButton { border: 0; background: transparent; color: inherit; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; }
+.iconButton:hover { background: #88888810; }
+.folderToolbar { display: flex; align-items: center; gap: 12px; margin: 8px 0 20px; font-size: 11px; color: #929294; }
+.folderToolbar button { border: 0; border-radius: 20px; padding: 5px 12px; color: var(--c-text-title, #303236); background: #8888880d; }
+.imageGrid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; }
+.thumbnail { position: relative; border: 2px solid transparent; border-radius: 13px; background: #8888880a; padding: 4px; aspect-ratio: 1; overflow: hidden; }
+.thumbnail img { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; display: block; }
+.selected { border-color: var(--c-text-title, #303236); }
+.check { position: absolute; top: 6px; right: 6px; width: 18px; height: 18px; display: grid; place-items: center; border: 1px solid #ffffffb0; border-radius: 50%; background: #30323699; color: white; }
+.restore { position: absolute; bottom: 4px; left: 4px; right: 4px; color: white; background: #30323699; font-size: 11px; padding: 3px; border-radius: 0 0 8px 8px; }
+.folderMenu { right: 18px; top: 58px; }
+.folderMenuBackdrop { position: absolute; inset: 0; background: transparent; border: 0; z-index: 31; border-radius: inherit; }
+.danger { color: #cf625b !important; }
+.empty { padding: 40px 0; text-align: center; font-size: 12px; opacity: .5; }
+.detailImage { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; border-radius: 12px; }
+.description { font-size: 13px; margin: 14px 0 5px; overflow-wrap: anywhere; }
+.url { display: block; font-size: 10px; opacity: .5; margin-bottom: 20px; }
+.shareButton { display: block; width: 100%; padding: 12px 6px; border-radius: 20px; background: var(--c-text-title, #303236); color: var(--c-card, #fff); border: 0; font-size: 13px !important; }
+.detailActions { display: grid; grid-template-columns: 1fr 1fr 1fr; margin-top: 12px; }
+.detailActions button { padding: 9px 2px; font-size: 11px; border: 0; background: transparent; color: inherit; }
+@media (prefers-color-scheme: dark) { .folderCard { color: #303236; } }
+
+.folderDialog, .detailDialog { position: relative; max-width: 350px !important; gap: 8px !important; }
+.folderDialog :global(.modal-header), .detailDialog :global(.modal-header) { flex-direction: row; padding: 0; }
+.folderDialog :global(.modal-body), .detailDialog :global(.modal-body) { min-height: 120px; }
+.ticketRule, .folderCaption { flex-shrink: 0; }
