@@ -133,6 +133,7 @@ const PRIMARY_DATA_MODULES: DataModuleDefinition[] = [
           "ai_phone_characters_v1",
           "ai_phone_bg_items_v1",
           "ai_phone_character_versions_v1",
+          "ai_phone_avatar_library_v1",
         ],
       },
     ],

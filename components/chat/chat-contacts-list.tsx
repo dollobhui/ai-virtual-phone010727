@@ -58,7 +58,12 @@ export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, 
     const [mascotAvatarUrl, setMascotAvatarUrl] = useState(mascotSettings.avatarImage || DEFAULT_MASCOT_AVATAR);
 
     const identity = useMemo(() => resolveUserIdentity(), []);
-    const chars = useMemo(() => loadCharacters(), []);
+    const [chars, setChars] = useState(loadCharacters);
+    useEffect(() => {
+        const refreshCharacters = () => setChars(loadCharacters());
+        window.addEventListener("character-avatar-updated", refreshCharacters);
+        return () => window.removeEventListener("character-avatar-updated", refreshCharacters);
+    }, []);
     const deferredContactFilter = useDeferredValue(contactFilter);
     const bodyRef = useRef<HTMLDivElement>(null);
     const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -118,7 +123,7 @@ export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, 
 
         setPendingRequests(getPendingFriendRequests());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [chars]);
 
     useEffect(() => {
         refresh();

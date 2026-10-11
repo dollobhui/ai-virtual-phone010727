@@ -171,7 +171,9 @@ function isImageGenerationMediaMessage(msg: ChatMessage): boolean {
 function formatPhotoDirective(msg: ChatMessage, prefix = ""): string {
     const description = msg.mediaData?.label?.trim() || "图片";
     const mode = msg.mediaData?.useReferenceImage === true ? "使用参考图" : "不使用参考图";
-    return `${prefix}[照片:${mode}:${description}]`;
+    const recommendation = msg.mediaData?.avatarRecommendationForCharacterId
+        ? `（头像推荐，图片消息 ID：${msg.id}，状态：${msg.mediaData.avatarRecommendationStatus || "pending"}）` : "";
+    return `${prefix}[照片:${mode}:${description}]${recommendation}`;
 }
 
 function formatImageGenerationDirective(msg: ChatMessage, prefix = ""): string {

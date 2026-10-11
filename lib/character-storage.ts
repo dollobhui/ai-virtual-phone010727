@@ -6,6 +6,7 @@ import { kvGet, kvSet, registerKvMigration } from "./kv-db";
 export const CHAR_BLOCKED_FIELDS = "CHAR_BLOCKED_FIELDS";
 
 const STORAGE_KEY = "ai_phone_characters_v1";
+export const CHARACTER_AVATAR_UPDATED_EVENT = "character-avatar-updated";
 const BG_ITEMS_STORAGE_KEY = "ai_phone_bg_items_v1";
 const UNSUPPORTED_CHARACTER_IMPORT_FIELDS = [
   "greeting",
@@ -68,7 +69,8 @@ export function loadCharacters(): Character[] {
     });
 
     if (needsSave) {
-      setTimeout(() => saveCharacters(chars), 0);
+      // A pending normalization must not overwrite a newer avatar/card update.
+      setTimeout(() => { if (_charsCache === chars) saveCharacters(chars); }, 0);
     }
     _charsCache = chars;
     return chars;
@@ -81,6 +83,17 @@ export function saveCharacters(chars: Character[]): void {
   if (typeof window === "undefined") return;
   kvSet(STORAGE_KEY, JSON.stringify(chars));
   _charsCache = null;
+}
+
+/** Update one character through the existing character store and invalidate its cache. */
+export function updateCharacterAvatar(characterId: string, avatar: string): Character | null {
+  const chars = loadCharacters();
+  const current = chars.find(char => char.id === characterId);
+  if (!current) return null;
+  const updated = { ...current, avatar, updatedAt: new Date().toISOString() };
+  saveCharacters(chars.map(char => char.id === characterId ? updated : char));
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(CHARACTER_AVATAR_UPDATED_EVENT, { detail: { characterId } }));
+  return updated;
 }
 
 export function loadBackgroundItems(): CanvasBgItem[] {

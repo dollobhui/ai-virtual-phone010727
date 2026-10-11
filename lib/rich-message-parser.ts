@@ -10,6 +10,7 @@
  */
 
 import type { ChatMessage } from "./chat-storage";
+import { stripAvatarDecisionMarkers } from "./chat-avatar-intent";
 import type { StateValue } from "./chat-storage";
 import { parseStateValues, mergeStateValues } from "./state-value-parser";
 import { stripActionShells } from "./action-parser";
@@ -594,6 +595,7 @@ function parseSegment(segment: string, parts: ParsedMessagePart[]) {
 // ── Main parser ──────────────────────────────────────────
 
 export function parseAIResponse(rawText: string, previousState: StateValue[]): ParsedAIResponse {
+    rawText = stripAvatarDecisionMarkers(rawText);
     // 0. FIRST: extract ```html blocks and <style>+HTML before any processing
     const htmlBlockPlaceholders: { placeholder: string; original: string }[] = [];
     let protected_ = rawText;

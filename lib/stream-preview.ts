@@ -5,6 +5,7 @@
 // 已经剥掉的不会再剥，未闭合的标签残留会在下一批增量到来时随全文重算被清掉。
 
 import { stripTextToolDirectives } from "./text-tool-protocol";
+import { stripAvatarDecisionMarkers } from "./chat-avatar-intent";
 
 const TOOL_DIRECTIVE_START_RE = /\[[^\]\r\n]*?(?:执行动作|获取指令|获取工具|工具调用)\s*[:：]/;
 const MEDIA_DIRECTIVE_RE = /\[(?:代付请求|音乐分享|语音条|表情包|照片|红包|转账|位置|名片|音乐|礼物)\s*[:：][^\]\r\n]*\]/g;
@@ -48,7 +49,9 @@ export function splitStreamPreviewSegments(text: string): string[] {
  *  两者都由调用方按当前会话生效的预设传入——净化器本身不猜协议标签名。 */
 export function cleanStreamText(raw: string, options?: { stripXmlTags?: readonly string[]; stripLiterals?: readonly string[] }): string {
     if (!raw) return "";
-    let text = raw;
+    let text = stripAvatarDecisionMarkers(raw);
+    // Hide incomplete avatar control tags while a streaming reply is arriving.
+    text = text.replace(/[\[【]\s*(?:接受|拒绝)(?:头(?:像(?:推(?:荐)?)?)?)?[^\]】\r\n]*$/, "");
     if (options?.stripXmlTags?.length) text = stripXmlTagBlocks(text, options.stripXmlTags);
     if (options?.stripLiterals?.length) text = stripLiteralTexts(text, options.stripLiterals);
     // 成对富媒体块整块剥掉

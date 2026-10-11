@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Brain, MoreHorizontal, Sparkles } from "lucide-react";
+import { Brain, MoreHorizontal, Sparkles, Image } from "lucide-react";
+import { AvatarLibraryPage } from "./avatar-library/avatar-library-page";
 import { MemoryBankPage } from "./memory/memory-bank-page";
 import { VnAssetPage } from "./vn/vn-asset-page";
 import { loadCharacters } from "@/lib/character-storage";
@@ -9,10 +10,11 @@ import { PageShell } from "./ui/page-shell";
 import { FeaturedCard, type FeaturedCardItem } from "./ui/card-grid";
 import { BINDING_ACCENTS, CONTENT_APP_ACCENTS } from "@/lib/ui-accent-colors";
 
-export type ResourceSubPage = "main" | "memory" | "vn_assets";
+export type ResourceSubPage = "main" | "memory" | "vn_assets" | "avatars";
 type MemoryView = "list" | "detail" | "settings";
 
 const RESOURCE_MENU: Omit<FeaturedCardItem, "onClick">[] = [
+    { id: "avatars", icon: Image, label: "头像库", desc: "URL 收藏与头像推荐", iconColor: BINDING_ACCENTS.memory },
     {
         id: "memory",
         icon: Brain,
@@ -76,6 +78,7 @@ export function PhoneResourcesApp({ onClose, onNotice, initialPage }: { onClose:
             ? (memoryView === "settings" ? "记忆设置"
                 : memoryView === "detail" ? (memoryCharName || "记忆详情")
                     : "记忆库")
+            : currentPage === "avatars" ? "头像库"
             : currentPage === "vn_assets" ? "漫卷资源"
                 : "资源库";
 
@@ -113,7 +116,7 @@ export function PhoneResourcesApp({ onClose, onNotice, initialPage }: { onClose:
                                         key={item.id}
                                         item={{
                                             ...item,
-                                            onClick: () => setCurrentPage(item.id === "vn_assets" ? "vn_assets" : "memory"),
+                                            onClick: () => setCurrentPage(item.id as ResourceSubPage),
                                         }}
                                     />
                                 ))}
@@ -122,6 +125,7 @@ export function PhoneResourcesApp({ onClose, onNotice, initialPage }: { onClose:
                     </div>
                 )}
 
+                {currentPage === "avatars" && <AvatarLibraryPage />}
                 {currentPage === "vn_assets" && (
                     <VnAssetPage onNotice={onNotice} />
                 )}

@@ -2408,7 +2408,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
           : null);
         setAppMarketLaunchContext(nextAppId === "appmarket" ? launchContextRecord : null);
         if (detail.appId === "resources") {
-          setResourcesInitialPage(detail.resourcePage === "vn_assets" || detail.resourcePage === "memory" ? detail.resourcePage : "main");
+          setResourcesInitialPage(detail.resourcePage === "vn_assets" || detail.resourcePage === "memory" || detail.resourcePage === "avatars" ? detail.resourcePage : "main");
         }
         setActiveApp(nextAppId as DesktopIconId);
         if (detail.sessionId) setChatInitSessionId(detail.sessionId);

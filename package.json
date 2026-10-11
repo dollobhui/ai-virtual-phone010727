@@ -19,7 +19,9 @@
     "test:online-text-model": "node --test scripts/test-online-text-model.cjs",
     "test:online-text-model:ui": "node scripts/test-online-text-model-ui.cjs",
     "test:config-folders": "node --test scripts/test-config-folders.cjs",
-    "test:config-folders:ui": "node scripts/test-config-folders-ui.cjs"
+    "test:config-folders:ui": "node scripts/test-config-folders-ui.cjs",
+    "test:avatar-library": "node --test scripts/test-avatar-library.cjs",
+    "test:avatar-library:ui": "node scripts/test-avatar-library-ui.cjs"
   },
   "dependencies": {
     "@gltf-transform/functions": "^4.4.1",

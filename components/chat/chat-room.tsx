@@ -29,7 +29,8 @@ import rehypeRaw from "rehype-raw";
 import remarkGfm from "remark-gfm";
 import { createPortal } from "react-dom";
 
-import { loadCharacters } from "@/lib/character-storage";
+import { loadCharacters, CHARACTER_AVATAR_UPDATED_EVENT } from "@/lib/character-storage";
+import { avatarReplyDecision, findUserAvatarChangeIntent } from "@/lib/chat-avatar-intent";
 import { Character } from "@/lib/character-types";
 import { loadCustomAppChatPlusActions, type RegisteredCustomAppChatPlusAction } from "@/lib/custom-app-chat-directives";
 import { CUSTOM_APPS_UPDATED_EVENT, getInstalledCustomApp } from "@/lib/custom-app-storage";
@@ -1611,6 +1612,16 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
     }, [session.id, syncMessagesFromStorage]);
 
 
+    const [avatarRevision, setAvatarRevision] = useState(0);
+    useEffect(() => {
+        const refreshAvatar = () => {
+            setCharacter(loadCharacters().find(x => x.id === session.contactId) || null);
+            setAvatarRevision(x => x + 1);
+        };
+        window.addEventListener(CHARACTER_AVATAR_UPDATED_EVENT, refreshAvatar);
+        return () => window.removeEventListener(CHARACTER_AVATAR_UPDATED_EVENT, refreshAvatar);
+    }, [session.contactId]);
+
     // Group chat: map of characterId → Character for quick lookup
     const groupCharMap = useMemo(() => {
         if (!session.isGroup) return new Map<string, Character>();
@@ -1621,7 +1632,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
             if (c) map.set(id, c);
         }
         return map;
-    }, [session.isGroup, session.participantIds]);
+    }, [session.isGroup, session.participantIds, avatarRevision]);
 
     // Flat array of group characters for components that need it
     const groupCharacters = useMemo(() => [...groupCharMap.values()], [groupCharMap]);
@@ -2855,6 +2866,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
         options?: {
             responseBatchId?: string;
             rawResponseText?: string;
+            avatarRecommendationReplyToId?: string | null;
             reasoningText?: string;
             /** 流式生成场景：用户已看过内容逐段长出，落库立即放出、跳过模拟打字节奏 */
             instantReveal?: boolean;
@@ -2923,7 +2935,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
 
         if (filteredParts.length === 0) {
             // Silence: only status panel / inner monologue / reasoning, no visible chat text
-            if (statusPanel || innerMonologue || options?.reasoningText) {
+            if (statusPanel || innerMonologue || options?.reasoningText || avatarReplyDecision(rawResponseText)) {
                 throwIfGenerationStopped(options);
                 const aiMsg = pushChatMessage({
                     sessionId: session.id,
@@ -2931,6 +2943,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                     content: "",
                     responseBatchId,
                     rawResponseText,
+                    avatarRecommendationReplyToId: options?.avatarRecommendationReplyToId,
                     statusPanel,
                     statusRegionMode: customStatusActive && statusPanel ? "custom" as const : undefined,
                     innerMonologue,
@@ -2964,6 +2977,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                 mediaData: part.mediaData,
                 responseBatchId,
                 rawResponseText,
+                avatarRecommendationReplyToId: options?.avatarRecommendationReplyToId,
                 statusPanel: idx === metaIdx && statusPanel ? statusPanel : undefined,
                 statusRegionMode: customStatusActive && idx === metaIdx && statusPanel ? "custom" as const : undefined,
                 innerMonologue: idx === metaIdx && innerMonologue ? innerMonologue : undefined,
@@ -3354,7 +3368,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                     },
                 );
                 if (!isCurrentGeneration()) return;
-                const result = await splitAndSaveAIMessages(flattenCompletionResult(cr), { ...generationGuard, reasoningText: capturedReasoning, instantReveal: isSessionStreamingEnabled(session, true) });
+                const result = await splitAndSaveAIMessages(flattenCompletionResult(cr), { ...generationGuard, avatarRecommendationReplyToId: findUserAvatarChangeIntent(history, session.id, session.contactId)?.image.id || null, reasoningText: capturedReasoning, instantReveal: isSessionStreamingEnabled(session, true) });
                 if (!isCurrentGeneration()) return;
                 scheduleFollowUp(session.id, 0, result.stateValues);
                 handleCallTrigger(result.triggerCall);
@@ -3634,6 +3648,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
         setStreamPreview(null);
         try {
             const latestMessages = loadChatMessages(session.id);
+            const avatarRecommendationReplyToId = findUserAvatarChangeIntent(latestMessages, session.id, session.contactId)?.image.id || null;
             if (session.isGroup) {
                 const streamedImageReplacementTasks: Promise<unknown>[] = [];
                 // 每轮 LLM 调用的思维链：中间轮挂到该轮首条气泡，最终轮传给 processGroupParts
@@ -3840,7 +3855,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                         if (text.trim()) {
                             const reasoningText = pendingReasoning;
                             pendingReasoning = undefined;
-                            lastSendResult = await splitAndSaveAIMessages(text, { ...options, ...generationGuard, reasoningText, instantReveal: isSessionStreamingEnabled(session, true) });
+                            lastSendResult = await splitAndSaveAIMessages(text, { ...options, ...generationGuard, avatarRecommendationReplyToId, reasoningText, instantReveal: isSessionStreamingEnabled(session, true) });
                         }
                     },
                     onToolNotice: (notice) => {
@@ -3864,7 +3879,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                         // bubbles. The native tool-call metadata then rides on a separate
                         // empty carrier message — mirroring the group-chat path above.
                         if (content.trim()) {
-                            await splitAndSaveAIMessages(content, { ...generationGuard, reasoningText: reasoning, instantReveal: isSessionStreamingEnabled(session, true) });
+                            await splitAndSaveAIMessages(content, { ...generationGuard, avatarRecommendationReplyToId, reasoningText: reasoning, instantReveal: isSessionStreamingEnabled(session, true) });
                         }
                         if (!isCurrentGeneration()) return;
                         const carrier = pushChatMessage({

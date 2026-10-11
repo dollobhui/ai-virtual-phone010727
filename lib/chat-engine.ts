@@ -35,6 +35,7 @@ import {
     resolveUserIdentity,
 } from "./settings-storage";
 import { assemblePromptPayload, applyOutputRegex, type LLMMessage, type LLMContentPart } from "./llm-prompt-assembler";
+import { applyWithProtectedAvatarDecisionMarkers, findUserAvatarChangeIntent } from "./chat-avatar-intent";
 import { MacroEngine, postProcessTrim } from "./macro-engine";
 import { getStatusRegionConfig, resolveStatusRegionSection, resolveStatusRegionExampleLine, resolveStatusRegionComposition, resolveStatusRegionFullExample } from "./chat-status-region";
 import {
@@ -864,7 +865,7 @@ export async function sendLLMStreamRequest(
                 appTags: options?.appTags,
                 followUpCount: options?.followUpCount,
             });
-            rawOutput = applyOutputRegex(rawOutput, regexes, { macroEngine, activeTags });
+            rawOutput = applyWithProtectedAvatarDecisionMarkers(rawOutput, text => applyOutputRegex(text, regexes, { macroEngine, activeTags }));
         }
         return { content: rawOutput, rawResponse, providerKind: request.providerKind };
     } catch (error: unknown) {
@@ -1002,7 +1003,7 @@ export async function sendLLMRequest(
             appTags: options?.appTags,
             followUpCount: options?.followUpCount,
         });
-        return applyOutputRegex(rawOutput, regexes, { macroEngine, activeTags });
+        return applyWithProtectedAvatarDecisionMarkers(rawOutput, text => applyOutputRegex(text, regexes, { macroEngine, activeTags }));
     } catch (error: unknown) {
         if (error instanceof DOMException && (error as DOMException).name === "AbortError") {
             throw new ChatEngineError("AI 回复超时（500秒），请重试。");
@@ -1317,7 +1318,7 @@ export async function sendLLMToolRequest(
                 appTags: options?.appTags,
                 followUpCount: options?.followUpCount,
             });
-            rawOutput = applyOutputRegex(rawOutput, regexes, { macroEngine, activeTags });
+            rawOutput = applyWithProtectedAvatarDecisionMarkers(rawOutput, text => applyOutputRegex(text, regexes, { macroEngine, activeTags }));
         }
 
         return {
@@ -1943,6 +1944,17 @@ export async function buildChatPromptMessages(
         offlineSummaryTag: preset?.story_summary_tag?.trim() || "summary",
         nativeToolHistory: usesNativeActions,
     });
+    const avatarIntent = !session.isGroup && !isOfflineMode && resolvedAppId === "chat"
+        ? findUserAvatarChangeIntent(historyForPrompt, session.id, character.id) : null;
+    if (avatarIntent) {
+        llmMessages.push({ role: "system", content: [
+            `用户给你推荐了图片消息 ${avatarIntent.image.id} 作为你自己的头像。图片描述：${avatarIntent.image.mediaData?.label || "无描述"}。`,
+            "结合你的人设与关系自主决定接受或拒绝，保留正常的自然聊天回复。不要机械接受。",
+            `愿意采用时，在自然回复末尾单独输出一次：[接受头像推荐:${avatarIntent.image.id}]。`,
+            `不愿采用时，在自然回复末尾单独输出一次：[拒绝头像推荐:${avatarIntent.image.id}]。`,
+            "控制标记不会展示给用户，不要解释标记或写进代码块。只处理本次推荐，不修改用户或其他角色头像。",
+        ].join("\n") });
+    }
     if (promptProfile?.output === "plain_text") {
         llmMessages.push({
             role: "system",

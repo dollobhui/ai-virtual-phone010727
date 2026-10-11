@@ -8,7 +8,9 @@ import {
     dbReplaceContacts, dbReplaceSessions,
 } from "./chat-db";
 import { resolveUserIdentity } from "./settings-storage";
-import { loadCharacters } from "./character-storage";
+import { loadCharacters, updateCharacterAvatar } from "./character-storage";
+import { avatarReplyDecision, findUserAvatarChangeIntent, inferAvatarDecisionFromReply } from "./chat-avatar-intent";
+import { normalizeAvatarUrl } from "./avatar-library";
 import { kvGet, kvSet, registerKvMigration } from "./kv-db";
 import { emitChatPluginEvent, runChatPluginTransformSync } from "./chat-plugin-hooks";
 import { parseAIResponse } from "./rich-message-parser";
@@ -98,6 +100,7 @@ export type ChatMessage = {
     order?: number; // Stable per-session display order
     responseBatchId?: string; // Assistant raw-response batch id
     rawResponseText?: string; // Assistant raw response before parsing/splitting
+    avatarRecommendationReplyToId?: string | null; // Snapshot of this generation's recommendation (null = none).
     responseRoundId?: string; // Group-chat whole-round id shared across all bubbles in one assistant turn
     toolExecutionId?: string; // Links visible tool attachments to their persisted tool result
     editableResponseText?: string; // Processed text shown in the reply editor
@@ -128,6 +131,9 @@ export type ChatMessage = {
         amount?: number;          // 红包/转账金额
         count?: number;           // 红包个数
         label?: string;           // 红包留言/转账备注/照片描述/位置名/表情名
+        avatarLibraryImageId?: string;
+        avatarRecommendationForCharacterId?: string;
+        avatarRecommendationStatus?: "pending" | "accepted" | "declined";
         status?: "pending" | "opened" | "received" | "declined" | "paid" | "canceled";  // 红包/转账/代付状态
         quoteMessageId?: string;  // 引用消息 ID
         quotePreview?: string;    // 引用消息预览文本
@@ -1260,7 +1266,35 @@ export function pushChatMessage(msg: Omit<ChatMessage, "id" | "createdAt" | "sta
     }
     emitChatPluginEvent("message.persisted", { message: newMsg });
 
+    resolvePendingAvatarRecommendation(newMsg);
+
     return newMsg;
+}
+
+/** momo's reply-time resolution, restricted to explicit library recommendations. */
+function resolvePendingAvatarRecommendation(message: ChatMessage): void {
+    if (message.role !== "assistant" || message.isRetracted || message.mediaType === "tool_call" || !message.rawResponseText) return;
+    const session = _sessionsCache.find(x => x.id === message.sessionId);
+    if (!session || session.isGroup || (message.senderCharacterId && message.senderCharacterId !== session.contactId)) return;
+    const intent = findUserAvatarChangeIntent(getSortedSessionMessages(session.id), session.id, session.contactId);
+    if (!intent) return;
+    if (message.avatarRecommendationReplyToId !== undefined && message.avatarRecommendationReplyToId !== intent.image.id) return;
+    const explicit = avatarReplyDecision(message.rawResponseText);
+    if (explicit?.messageId && explicit.messageId !== intent.image.id) return;
+    const decision = explicit?.decision ?? inferAvatarDecisionFromReply(message.rawResponseText);
+    if (!decision) return;
+    const recommendation = intent.image;
+    try { normalizeAvatarUrl(recommendation.mediaUrl!); } catch { return; }
+    if (!loadCharacters().some(x => x.id === session.contactId)) return;
+    recommendation.mediaData = { ...recommendation.mediaData, avatarRecommendationStatus: decision };
+    dbPutMessage(recommendation);
+    if (decision === "accepted") {
+        const updated = updateCharacterAvatar(session.contactId, recommendation.mediaUrl!);
+        if (updated) pushChatMessage({ sessionId: session.id, role: "system", content: `${updated.name}更换了头像` });
+    }
+    // Callers append the returned assistant message synchronously; refresh after
+    // that append so the UI neither duplicates it nor loses the system notice.
+    if (typeof window !== "undefined") queueMicrotask(() => window.dispatchEvent(new CustomEvent("chat-messages-updated", { detail: { sessionId: session.id } })));
 }
 
 export function upsertImportedChatMessage(msg: ChatMessage): { message: ChatMessage; inserted: boolean } {
