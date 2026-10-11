@@ -1160,7 +1160,7 @@ export function ChatSettingsPanel({
                     {!session.isGroup && (
                         <button className="menu-item" onClick={() => setShowChatSounds(true)}>
                             <ChatInfoIcon icon={FolderOpen} color={BINDING_ACCENTS.voice} />
-                            <div className="menu-label-group"><span className="menu-label">角色专属提示音</span></div>
+                            <div className="menu-label-group"><span className="menu-label">提示音</span></div>
                             <div className="menu-right"><ChevronRight size={16} /></div>
                         </button>
                     )}
